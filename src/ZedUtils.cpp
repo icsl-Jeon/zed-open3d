@@ -1,8 +1,9 @@
 //
 // Created by jbs on 21. 9. 5..
 //
-
 #include <ZedUtils.h>
+#include <Open3dUtils.h>
+
 #include <string>
 using namespace std;
 
@@ -53,6 +54,11 @@ bool zed_utils::initCamera(sl::Camera &zed, sl::InitParameters initParameters) {
     initParameters.coordinate_system = sl::COORDINATE_SYSTEM::RIGHT_HANDED_Z_UP_X_FWD;
     initParameters.depth_mode = sl::DEPTH_MODE::ULTRA;
 
+    sl::ObjectDetectionParameters detectionParameters;
+    detectionParameters.detection_model = sl::DETECTION_MODEL::HUMAN_BODY_MEDIUM;
+    detectionParameters.enable_tracking = false;
+
+
     // Enabling functions
     auto returned_state = zed.open(initParameters);
     if (returned_state != sl::ERROR_CODE::SUCCESS) {
@@ -67,5 +73,55 @@ bool zed_utils::initCamera(sl::Camera &zed, sl::InitParameters initParameters) {
         return false;
     }
 
+    returned_state = zed.enableObjectDetection(detectionParameters);
+    if(returned_state != sl::ERROR_CODE::SUCCESS) {
+        printf("Enabling object detection failed: \n");
+        zed.close();
+        return false;
+    }
+
+
     return true;
+}
+
+// Mapping between MAT_TYPE and CV_TYPE
+int zed_utils::getOCVtype(sl::MAT_TYPE type) {
+    int cv_type = -1;
+    switch (type) {
+        case sl::MAT_TYPE::F32_C1: cv_type = CV_32FC1; break;
+        case sl::MAT_TYPE::F32_C2: cv_type = CV_32FC2; break;
+        case sl::MAT_TYPE::F32_C3: cv_type = CV_32FC3; break;
+        case sl::MAT_TYPE::F32_C4: cv_type = CV_32FC4; break;
+        case sl::MAT_TYPE::U8_C1: cv_type = CV_8UC1; break;
+        case sl::MAT_TYPE::U8_C2: cv_type = CV_8UC2; break;
+        case sl::MAT_TYPE::U8_C3: cv_type = CV_8UC3; break;
+        case sl::MAT_TYPE::U8_C4: cv_type = CV_8UC4; break;
+        default: break;
+    }
+    return cv_type;
+}
+
+cv::Mat zed_utils::slMat2cvMat(sl::Mat& input) {
+    // Since cv::Mat data requires a uchar* pointer, we get the uchar1 pointer from sl::Mat (getPtr<T>())
+    // cv::Mat and sl::Mat will share a single memory structure
+    return cv::Mat(input.getHeight(), input.getWidth(),
+                   zed_utils::getOCVtype(input.getDataType()),
+                   input.getPtr<sl::uchar1>(sl::MEM::CPU), input.getStepBytes(sl::MEM::CPU));
+}
+
+cv::cuda::GpuMat zed_utils::slMat2cvMatGPU(sl::Mat& input) {
+    // Since cv::Mat data requires a uchar* pointer, we get the uchar1 pointer from sl::Mat (getPtr<T>())
+    // cv::Mat and sl::Mat will share a single memory structure
+    return cv::cuda::GpuMat(input.getHeight(), input.getWidth(),
+                            zed_utils::getOCVtype(input.getDataType()),
+                            input.getPtr<sl::uchar1>(sl::MEM::GPU), input.getStepBytes(sl::MEM::GPU));
+}
+
+open3d::geometry::RGBDImage createFromZedImage(const cv::Mat& image, const cv::Mat& depth){
+    open3d::geometry::Image imageO3d, depthO3d;
+    imageO3d.Prepare(image.cols, image.rows, 3, 1);
+    depthO3d.Prepare(depth.cols, depth.rows, 1, 4);
+    memcpy(imageO3d.data_.data(), image.data, imageO3d.data_.size());
+    memcpy(depthO3d.data_.data(), depth.data, depthO3d.data_.size());
+    return *open3d::geometry::RGBDImage::CreateFromColorAndDepth(imageO3d, depthO3d);
 }
