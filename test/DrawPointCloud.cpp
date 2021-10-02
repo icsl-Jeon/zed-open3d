@@ -16,7 +16,7 @@ int main(int argc, char** argv) {
     zed_utils::initCamera(zed, initParameters);
 
     sl::RuntimeParameters runParameters;
-    runParameters.confidence_threshold = 90;
+    runParameters.confidence_threshold = 10;
     runParameters.texture_confidence_threshold = 100;
 
     // Initialize ZED Objects
@@ -36,11 +36,13 @@ int main(int argc, char** argv) {
     bool isInit = false;
     open3d::visualization::Visualizer vis;
     vis.CreateVisualizerWindow("Open3D image",720,404);
+    auto& ctl = vis.GetViewControl(); // note referance specifier
+    auto& rtl = vis.GetRenderOption();
     sl::Objects objects;
 
     while (!stop)
         if (zed.grab(runParameters) == sl::ERROR_CODE::SUCCESS){
-            // 1. retrieve
+            // 1. retrieve zed
             misc::Timer timer;
             zed.retrieveImage(image,sl::VIEW::LEFT,sl::MEM::CPU);
             zed.retrieveMeasure(points, sl::MEASURE::XYZRGBA, sl::MEM::CPU); // MEM GPU is faster than CPU 2 times.
@@ -48,11 +50,20 @@ int main(int argc, char** argv) {
             cv::cvtColor(imageCv, imageCv3Ch, cv::COLOR_BGRA2RGB);
             printf("Image + points in %.3f ms \n" ,timer.stop());
 
+            // 2. draw in open3d
             if (not isInit) {
                 vis.AddGeometry(pointsO3dPtr);
+                vis.AddGeometry(
+                        open3d::geometry::TriangleMesh::CreateCoordinateFrame(0.1)); // add coord at origin
                 isInit = true;
-            }
+                ctl.SetFront(Eigen::Vector3d(-1,0,0)); // seems that front is normal to the window ... (-x of world)
+                ctl.SetUp(Eigen::Vector3d(0,0,1)); // direction of ceiling
+                ctl.SetLookat(Eigen::Vector3d(0,0,0));
+                ctl.SetZoom(0.1);
+                rtl.SetPointSize(1);
+                rtl.background_color_ = Eigen::Vector3d(0,0,0);
 
+            }
 
             Eigen::Vector3d min_bound = pointsO3dPtr->GetMinBound();
             Eigen::Vector3d max_bound = pointsO3dPtr->GetMaxBound();
@@ -62,13 +73,12 @@ int main(int argc, char** argv) {
                     min_bound(0), min_bound(1), min_bound(2), max_bound(0),
                     max_bound(1), max_bound(2));
 
-
-            // 2. draw
             vis.UpdateGeometry();
             vis.PollEvents();
             vis.UpdateRender();
+            std::cout << vis.GetViewControl().GetViewMatrix() << std::endl;
 
-
+            // 3. opencv window
             cv::resize(imageCv, imageDisplay, displaySize);
             cv::imshow("Image", imageDisplay);
             cv::waitKey(1);
