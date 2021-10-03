@@ -33,3 +33,7 @@ target_link_libraries(DrawPointCloud PRIVATE  ${ZED_LIBS}   ${OpenCV_LIBRARIES} 
 
 add_executable(DrawImage test/DrawImage.cpp src/ZedUtils.cpp src/Misc.cpp src/Open3dUtils.cpp )
 target_link_libraries(DrawImage PRIVATE  ${ZED_LIBS}   ${OpenCV_LIBRARIES} Open3D::Open3D )
+
+
+add_executable(DrawAttention test/DrawAttention.cpp src/ZedUtils.cpp src/Misc.cpp src/Open3dUtils.cpp )
+target_link_libraries(DrawAttention PRIVATE  ${ZED_LIBS}   ${OpenCV_LIBRARIES} Open3D::Open3D )

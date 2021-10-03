@@ -10,7 +10,6 @@ int main(int argc, char** argv) {
     // Initialize ZED camera
     sl::Camera zed;
     sl::InitParameters initParameters;
-    initParameters.coordinate_units = sl::UNIT::METER;
 
     zed_utils::parseArgs(argc, argv, initParameters);
     zed_utils::initCamera(zed, initParameters);

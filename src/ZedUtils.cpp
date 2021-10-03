@@ -58,6 +58,7 @@ bool zed_utils::initCamera(sl::Camera &zed, sl::InitParameters initParameters) {
     sl::ObjectDetectionParameters detectionParameters;
     detectionParameters.detection_model = sl::DETECTION_MODEL::HUMAN_BODY_MEDIUM;
     detectionParameters.enable_tracking = false;
+    detectionParameters.enable_body_fitting = true;
 
 
     // Enabling functions
