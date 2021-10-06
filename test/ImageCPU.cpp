@@ -4,6 +4,7 @@
 
 volatile sig_atomic_t stop;
 
+namespace o3d_tensor =  open3d::t::geometry ;
 
 int main(int argc, char** argv) {
 
@@ -28,9 +29,7 @@ int main(int argc, char** argv) {
     cv::Mat imageCv = zed_utils::slMat2cvMat(image);
     cv::Mat imageCv3Ch;
     cv::Mat depthCv = zed_utils::slMat2cvMat(depth);
-    cv::Size displaySize(720, 404);
-    cv::Mat imageDisplay(displaySize, CV_8UC4);
-    cv::Mat depthDisplay(displaySize, CV_32FC1);
+
     // open3d object
     auto  imageO3dPtr = std::make_shared<open3d::geometry::Image>();
     auto  depthO3dPtr = std::make_shared<open3d::geometry::Image>();
@@ -39,33 +38,33 @@ int main(int argc, char** argv) {
     depthO3dPtr->Prepare(cameraConfig.resolution.width, cameraConfig.resolution.height,
                          1, 4); // 32F_1C
 
+    auto imageO3d_gpu = std::make_shared<o3d_tensor::Image>();
+    imageO3d_gpu->To(open3d::core::Device("CUDA:0"));
+    auto depthO3d_gpu = std::make_shared<o3d_tensor::Image>();
+    depthO3d_gpu->To(open3d::core::Device("CUDA:0"));
+
     open3d::visualization::Visualizer vis;
     vis.CreateVisualizerWindow("Open3D image",720,404);
     vis.AddGeometry(imageO3dPtr);
 
-    sl::Objects objects;
-
     while (!stop)
         if (zed.grab(runParameters) == sl::ERROR_CODE::SUCCESS){
-            // 1. retrieve
+            // 1. retrieve ZED image to CPU
             misc::Timer timer;
             zed.retrieveImage(image,sl::VIEW::LEFT,sl::MEM::CPU);
             zed.retrieveMeasure(depth, sl::MEASURE::DEPTH, sl::MEM::CPU);
             cv::cvtColor(imageCv, imageCv3Ch, cv::COLOR_BGRA2RGB);
-            o3d_utils::fromCvMat(imageCv3Ch, *imageO3dPtr);
-            o3d_utils::fromCvMat(depthCv, *depthO3dPtr);
-            printf("Image + depth retrieved in %.3f ms \n" ,timer.stop());
 
-            // 2. draw
+            // 2. Open3d legacy + gpu images
+            o3d_utils::fromCvMat(imageCv3Ch, *imageO3dPtr);
+            *imageO3d_gpu = imageO3d_gpu->FromLegacy(*imageO3dPtr,open3d::core::Device("CUDA:0"));
+            o3d_utils::fromCvMat(depthCv, *depthO3dPtr);
+            *depthO3d_gpu = depthO3d_gpu->FromLegacy(*depthO3dPtr,open3d::core::Device("CUDA:0"));
+            printf("Image + depth retrieved to GPU in %.3f ms \n" ,timer.stop());
+
             vis.UpdateGeometry();
             vis.PollEvents();
             vis.UpdateRender();
-
-            cv::resize(imageCv, imageDisplay, displaySize);
-            cv::resize(depthCv, depthDisplay, displaySize);
-//            cv::imshow("Image", imageDisplay);
-            cv::imshow("Depth", depthDisplay);
-            cv::waitKey(1);
 
         // replay option
         }else if (zed.grab(runParameters) == sl::ERROR_CODE::END_OF_SVOFILE_REACHED){

@@ -31,7 +31,7 @@ int main(int argc, char** argv) {
     cv::Mat imageDisplay(displaySize, CV_8UC4);
 
     // open3d object
-    auto pointsO3dPtr = std::make_shared<open3d::geometry::PointCloud>();
+    auto pointsO3dPtr = std::make_shared<open3d::geometry::PointCloud>(); // CPU
     bool isInit = false;
     open3d::visualization::Visualizer vis;
     vis.CreateVisualizerWindow("Open3D image",720,404);
@@ -46,6 +46,7 @@ int main(int argc, char** argv) {
             zed.retrieveImage(image,sl::VIEW::LEFT,sl::MEM::CPU);
             zed.retrieveMeasure(points, sl::MEASURE::XYZRGBA, sl::MEM::CPU); // MEM GPU is faster than CPU 2 times.
             o3d_utils::fromSlPoints(points, *pointsO3dPtr);
+            // lets try pointcloud in gpu
             cv::cvtColor(imageCv, imageCv3Ch, cv::COLOR_BGRA2RGB);
             printf("Image + points in %.3f ms \n" ,timer.stop());
 

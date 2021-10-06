@@ -9,7 +9,7 @@ void o3d_utils::fromCvMat(const cv::Mat& cvImage, open3d::geometry::Image& o3dIm
                    (o3dImage.height_== cvImage.rows));
     // Currently only 8U_C3 implemented
     int channels = cvImage.channels();
-    int bytesPerChannel = cvImage.depth()/2 + 1;
+    int bytesPerChannel = cvImage.elemSize()/channels;
     memcpy(o3dImage.data_.data(),
            cvImage.data, cvImage.total() * channels * bytesPerChannel);
 }

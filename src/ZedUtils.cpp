@@ -111,6 +111,7 @@ cv::Mat zed_utils::slMat2cvMat(sl::Mat& input) {
                    input.getPtr<sl::uchar1>(sl::MEM::CPU), input.getStepBytes(sl::MEM::CPU));
 }
 
+
 cv::cuda::GpuMat zed_utils::slMat2cvMatGPU(sl::Mat& input) {
     // Since cv::Mat data requires a uchar* pointer, we get the uchar1 pointer from sl::Mat (getPtr<T>())
     // cv::Mat and sl::Mat will share a single memory structure

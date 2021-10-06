@@ -6,6 +6,7 @@
 #define ZED_OPEN3D_OPEN3DUTILS_H
 
 #include <open3d/Open3D.h>
+#include <open3d/core/MemoryManager.h>
 #include <opencv2/opencv.hpp>
 #include <sl/Camera.hpp>
 using namespace std;
