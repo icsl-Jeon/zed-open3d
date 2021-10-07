@@ -42,5 +42,8 @@ target_link_libraries(ImageCPU PRIVATE  ${ZED_LIBS}   ${OpenCV_LIBRARIES} Open3D
 add_executable(ImageGPU test/ImageGPU.cpp src/ZedUtils.cpp src/Misc.cpp src/Open3dUtils.cpp )
 target_link_libraries(ImageGPU PRIVATE  ${ZED_LIBS}   ${OpenCV_LIBRARIES} Open3D::Open3D ${CUDA_LIBRARIES})
 
+add_executable(PointCloudGPU test/PointCloudGPU.cpp src/ZedUtils.cpp src/Misc.cpp src/Open3dUtils.cpp )
+target_link_libraries(PointCloudGPU PRIVATE  ${ZED_LIBS}   ${OpenCV_LIBRARIES} Open3D::Open3D ${CUDA_LIBRARIES})
+
 add_executable(DrawAttention test/DrawAttention.cpp src/ZedUtils.cpp src/Misc.cpp src/Open3dUtils.cpp )
 target_link_libraries(DrawAttention PRIVATE  ${ZED_LIBS}   ${OpenCV_LIBRARIES} Open3D::Open3D )
