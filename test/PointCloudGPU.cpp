@@ -7,17 +7,17 @@ volatile sig_atomic_t stop;
 namespace o3d_tensor =  open3d::t::geometry ;
 namespace o3d_legacy = open3d::geometry;
 namespace o3d_core = open3d::core;
+namespace o3d_vis = open3d::visualization;
 
-int main(int argc, char** argv) {
+sl::Camera zed;
 
-    // Initialize ZED camera
-    sl::Camera zed;
-    sl::InitParameters initParameters;
-    initParameters.coordinate_units = sl::UNIT::METER;
+std::shared_ptr<o3d_tensor::PointCloud> pointsO3dPtr;
+std::shared_ptr<o3d_vis::visualizer::O3DVisualizer> vis;
+std::mutex locker;
+string cloudName = "zed points";
 
-    zed_utils::parseArgs(argc, argv, initParameters);
-    zed_utils::initCamera(zed, initParameters);
-
+void updateThread(){
+    // ZED dynamic parameter
     sl::RuntimeParameters runParameters;
     runParameters.confidence_threshold = 50;
     runParameters.texture_confidence_threshold = 100;
@@ -52,19 +52,16 @@ int main(int argc, char** argv) {
     auto rgbBlob = std::make_shared<o3d_core::Blob>(
             device_gpu,imageCv3Ch.cudaPtr(), nullptr);
     auto  rgbTensor = o3d_core::Tensor({row,col,3},{3*col,3,1},
-                               rgbBlob->GetDataPtr(),rgbType,rgbBlob); // rgbTensor.IsContiguous() = true
+                                       rgbBlob->GetDataPtr(),rgbType,rgbBlob); // rgbTensor.IsContiguous() = true
     o3d_tensor::Image imageO3d(rgbTensor);
 
     auto depthBlob = std::make_shared<o3d_core::Blob>(
             device_gpu, depthCv.cudaPtr(), nullptr);
     auto depthTensor = o3d_core::Tensor({row,col,1}, {col,1,1},
-                      depthBlob->GetDataPtr(),depthType,depthBlob);
+                                        depthBlob->GetDataPtr(),depthType,depthBlob);
     o3d_tensor::Image depthO3d(depthTensor);
 
     // pointcloud construction
-    auto pointsO3d = o3d_tensor::PointCloud();
-    auto pointsO3dPtr_cpu =
-            std::make_shared<o3d_legacy::PointCloud>(); // Note: ToLegacy() critically slow for pcl.
     auto rgbdO3dPtr_cpu = std::make_shared<o3d_legacy::RGBDImage>();
 
     open3d::camera::PinholeCameraIntrinsic intrinsicO3d;
@@ -74,11 +71,13 @@ int main(int argc, char** argv) {
     intrinsicO3dTensor.To(device_gpu);
     auto extrinsicO3dTensor = o3d_core::Tensor::Eye(4,o3d_core::Float64,device_gpu);
 
-    // just for visualization in open3d
-    open3d::visualization::Visualizer vis;
-    bool isInit = false;
-    vis.CreateVisualizerWindow("Open3D points",600,400);
+    // open3d visualization
+    auto mat = o3d_vis::rendering::Material();
+    mat.shader = "defaultUnlit";
+    auto pointsO3dPtr_cpu = std::make_shared<o3d_tensor::PointCloud>() ;
 
+    // retrieving thread start
+    bool isInit = false;
     while (!stop)
         if (zed.grab(runParameters) == sl::ERROR_CODE::SUCCESS){
 
@@ -88,34 +87,56 @@ int main(int argc, char** argv) {
             zed.retrieveMeasure(depth, sl::MEASURE::DEPTH, sl::MEM::GPU);
             cv::cuda::cvtColor(imageCv, imageCv3Ch,cv::COLOR_BGRA2RGB);
 
-            // construct pointcloud
-            o3d_tensor::RGBDImage rgbdImage (imageO3d,depthO3d);
-            pointsO3d = (o3d_tensor::PointCloud::CreateFromRGBDImage(rgbdImage,
-                                                                     intrinsicO3dTensor,extrinsicO3dTensor,
-                                                                     1000,5,2));
+            // construct pointcloud. We lock with the same mutex in the posted thread on visualizer
+            {
+                std::lock_guard<std::mutex> lock(locker);
+                o3d_tensor::RGBDImage rgbdImage (imageO3d,depthO3d);
+                *pointsO3dPtr = (o3d_tensor::PointCloud::CreateFromRGBDImage(rgbdImage,
+                                                                         intrinsicO3dTensor, extrinsicO3dTensor,
+                                                                         1, 5, 2));
+            }
             printf("Image + depth + points retrieved in %.3f ms. \n" ,timer.stop());
 
+            // not mandatory..
+            misc::Timer timerVis;
+            *pointsO3dPtr_cpu = pointsO3dPtr->To(o3d_core::Device("CPU:0")); // ToLegacy() takes much time but To() is okay.
+            printf("cpu transfer took %.3f ms. (only for visualization)\n" ,timerVis.stop());
+
+            // initialize viewport
             if (not isInit){
                 /** Dummay operation to initialize cuda scope for .ToLegacy() **/
                 imageCv3Ch.download(imageCv3Ch_cpu);
                 o3d_core::Tensor tensorRgbDummy(
                         (imageCv3Ch_cpu.data), {row,col,3},rgbType,device_gpu);
 
-                *pointsO3dPtr_cpu = pointsO3d.ToLegacy();
-                vis.AddGeometry(pointsO3dPtr_cpu);
+                // configure initial viewpoint
+                auto pointsCenter = pointsO3dPtr->GetCenter();
+                auto centerCPU = pointsCenter.ToFlatVector<float>();
+                Eigen::Vector3f pointsCenterEigen(centerCPU[0],centerCPU[1],centerCPU[2]);
+                Eigen::Vector3f eye = pointsCenterEigen + Eigen::Vector3f(0,0,-3);
+
+                o3d_vis::gui::Application::GetInstance().PostToMainThread(
+                    vis.get(), [mat,pointsCenterEigen,eye,pointsO3dPtr_cpu](){
+                        std::lock_guard<std::mutex> lock (locker);
+                        vis->AddGeometry(cloudName,pointsO3dPtr_cpu, &mat);
+                        vis->ResetCameraToDefault();
+                        vis->SetupCamera(60,pointsCenterEigen,eye,{0.0, -1.0, 0.0});
+                    }
+                );
                 isInit = true;
+            }else{
+                // should UpdateGeometry used?
+                o3d_vis::gui::Application::GetInstance().PostToMainThread(
+                    vis.get(), [mat, pointsO3dPtr_cpu](){
+                        std::lock_guard<std::mutex> lock (locker);
+                        vis->GetScene()->GetScene()->UpdateGeometry(cloudName,*pointsO3dPtr_cpu,
+                                                        o3d_vis::rendering::Scene::kUpdatePointsFlag |
+                                                                    o3d_vis::rendering::Scene::kUpdateColorsFlag);
+                        vis->SetPointSize(2); // this calls ForceRedraw(), readily update the viewport.
+                    }
+                );
+
             }
-
-
-            // 2. Open3d
-            misc::Timer timerTransfer;
-            *pointsO3dPtr_cpu = pointsO3d.ToLegacy();
-            printf("transferred points in %.3f ms. \n" ,timerTransfer.stop());
-            vis.UpdateGeometry();
-            vis.PollEvents();
-            vis.UpdateRender();
-
-
         }else if (zed.grab(runParameters) == sl::ERROR_CODE::END_OF_SVOFILE_REACHED){
             printf("SVO reached end. Replay. \n");
             zed.setSVOPosition(1);
@@ -123,7 +144,27 @@ int main(int argc, char** argv) {
         else
             printf("Grab failed. \n");
 
-    printf("exit program. \n");
+}
+
+
+int main(int argc, char** argv) {
+    // Initialize ZED camera
+    sl::InitParameters initParameters;
+    initParameters.coordinate_units = sl::UNIT::METER;
+    zed_utils::parseArgs(argc, argv, initParameters);
+    zed_utils::initCamera(zed, initParameters);
+
+    // Initialize open3d
+    pointsO3dPtr = std::make_shared<o3d_tensor::PointCloud>();
+    const char *const resource_path{"/usr/local/bin/Open3D/resources"};
+    o3d_vis::gui::Application::GetInstance().Initialize(resource_path);
+    vis = std::make_shared<o3d_vis::visualizer::O3DVisualizer>("Open3d - PointCloud",800,600);
+    o3d_vis::gui::Application::GetInstance().AddWindow(vis);
+    std::thread cameraThread (updateThread);
+
+    // Run application
+    o3d_vis::gui::Application::GetInstance().Run();
+    cameraThread.join();
 
     return 0;
 }
