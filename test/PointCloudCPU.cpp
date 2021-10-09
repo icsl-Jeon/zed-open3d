@@ -27,8 +27,8 @@ void updateThread(){
     sl::Resolution imageResultion = zed.getCameraInformation().camera_resolution;
     const int row = imageResultion.height;
     const int col = imageResultion.width;
-    sl::Mat image(cameraConfig.resolution.width, cameraConfig.resolution.height, sl::MAT_TYPE::U8_C4,  sl::MEM::GPU);
-    sl::Mat depth(cameraConfig.resolution.width, cameraConfig.resolution.height, sl::MAT_TYPE::F32_C1, sl::MEM::GPU);
+    sl::Mat image(cameraConfig.resolution.width, cameraConfig.resolution.height, sl::MAT_TYPE::U8_C4,  sl::MEM::CPU);
+    sl::Mat depth(cameraConfig.resolution.width, cameraConfig.resolution.height, sl::MAT_TYPE::F32_C1, sl::MEM::CPU);
     sl::Objects objects;
     sl::CalibrationParameters intrinsicParam = zed.getCameraInformation().calibration_parameters;
     float fx = intrinsicParam.left_cam.fx;
@@ -37,10 +37,9 @@ void updateThread(){
     float cy = intrinsicParam.left_cam.fy;
 
     // buffer binding for cv objects
-    cv::cuda::GpuMat imageCv = zed_utils::slMat2cvMatGPU(image); // bound buffer (rgba)
-    cv::cuda::GpuMat depthCv = zed_utils::slMat2cvMatGPU(depth); // bound buffer
-    cv::cuda::GpuMat imageCv3Ch = cv::cuda::createContinuous(row,col,CV_8UC3);
-    cv::Mat imageCv3Ch_cpu; // will not be used. But needed for cuda scope
+    cv::Mat imageCv = zed_utils::slMat2cvMat(image); // bound buffer (rgba)
+    cv::Mat depthCv = zed_utils::slMat2cvMat(depth); // bound buffer
+    cv::Mat imageCv3Ch (row,col,CV_8UC3);
 
     // open3d object
     o3d_core::Device device_gpu("CUDA:0");
@@ -50,13 +49,13 @@ void updateThread(){
 
     // bind open3d and opencv in cuda memory
     auto rgbBlob = std::make_shared<o3d_core::Blob>(
-            device_gpu,imageCv3Ch.cudaPtr(), nullptr);
+            device_cpu,imageCv3Ch.data, nullptr);
     auto  rgbTensor = o3d_core::Tensor({row,col,3},{3*col,3,1},
                                        rgbBlob->GetDataPtr(),rgbType,rgbBlob); // rgbTensor.IsContiguous() = true
     o3d_tensor::Image imageO3d(rgbTensor);
 
     auto depthBlob = std::make_shared<o3d_core::Blob>(
-            device_gpu, depthCv.cudaPtr(), nullptr);
+            device_cpu, depthCv.data, nullptr);
     auto depthTensor = o3d_core::Tensor({row,col,1}, {col,1,1},
                                         depthBlob->GetDataPtr(),depthType,depthBlob);
     o3d_tensor::Image depthO3d(depthTensor);
@@ -68,13 +67,12 @@ void updateThread(){
     intrinsicO3d.SetIntrinsics(col,row,fx,fy,cx,cy);
     o3d_core::Tensor intrinsicO3dTensor =
             open3d::core::eigen_converter::EigenMatrixToTensor(intrinsicO3d.intrinsic_matrix_);
-    intrinsicO3dTensor.To(device_gpu);
-    auto extrinsicO3dTensor = o3d_core::Tensor::Eye(4,o3d_core::Float64,device_gpu);
+    intrinsicO3dTensor.To(device_cpu);
+    auto extrinsicO3dTensor = o3d_core::Tensor::Eye(4,o3d_core::Float64,device_cpu);
 
     // open3d visualization
     auto mat = o3d_vis::rendering::Material();
     mat.shader = "defaultUnlit";
-    auto pointsO3dPtr_cpu = std::make_shared<o3d_tensor::PointCloud>() ;
 
     // retrieving thread start
     bool isInit = false;
@@ -83,33 +81,26 @@ void updateThread(){
 
             // retrieve ZED image in GPU
             misc::Timer timer;
-            zed.retrieveImage(image,sl::VIEW::LEFT,sl::MEM::GPU);
-            zed.retrieveMeasure(depth, sl::MEASURE::DEPTH, sl::MEM::GPU);
-            cv::cuda::cvtColor(imageCv, imageCv3Ch,cv::COLOR_BGRA2RGB);
+            zed.retrieveImage(image,sl::VIEW::LEFT,sl::MEM::CPU);
+            zed.retrieveMeasure(depth, sl::MEASURE::DEPTH, sl::MEM::CPU);
+            cv::cvtColor(imageCv, imageCv3Ch,cv::COLOR_BGRA2RGB);
 
             // construct pointcloud. We lock with the same mutex in the posted thread on visualizer
             {
                 std::lock_guard<std::mutex> lock(locker);
-
+                misc::Timer timerPCL;
                 o3d_tensor::RGBDImage rgbdImage (imageO3d,depthO3d);
                 *pointsO3dPtr = (o3d_tensor::PointCloud::CreateFromRGBDImage(rgbdImage,
                                                                          intrinsicO3dTensor, extrinsicO3dTensor,
                                                                          1, 5, 2));
+//                printf("pointcloud was constructed in %.3f ms. \n" ,timerPCL.stop());
 
             }
             printf("Image + depth + points retrieved in %.3f ms. \n" ,timer.stop());
 
-            // not mandatory..
-            misc::Timer timerVis;
-            *pointsO3dPtr_cpu = pointsO3dPtr->To(o3d_core::Device("CPU:0")); // ToLegacy() takes much time but To() is okay.
-            printf("cpu transfer took %.3f ms. (only for visualization)\n" ,timerVis.stop());
 
             // initialize viewport
             if (not isInit){
-                /** Dummay operation to initialize cuda scope for .ToLegacy() **/
-                imageCv3Ch.download(imageCv3Ch_cpu);
-                o3d_core::Tensor tensorRgbDummy(
-                        (imageCv3Ch_cpu.data), {row,col,3},rgbType,device_gpu);
 
                 // configure initial viewpoint
                 auto pointsCenter = pointsO3dPtr->GetCenter();
@@ -118,9 +109,9 @@ void updateThread(){
                 Eigen::Vector3f eye = pointsCenterEigen + Eigen::Vector3f(0,0,-3);
 
                 o3d_vis::gui::Application::GetInstance().PostToMainThread(
-                    vis.get(), [mat,pointsCenterEigen,eye,pointsO3dPtr_cpu](){
+                    vis.get(), [mat,pointsCenterEigen,eye](){
                         std::lock_guard<std::mutex> lock (locker);
-                        vis->AddGeometry(cloudName,pointsO3dPtr_cpu, &mat);
+                        vis->AddGeometry(cloudName,pointsO3dPtr, &mat);
                         vis->ResetCameraToDefault();
                         vis->SetupCamera(60,pointsCenterEigen,eye,{0.0, -1.0, 0.0});
                     }
@@ -128,9 +119,9 @@ void updateThread(){
                 isInit = true;
             }else{
                 o3d_vis::gui::Application::GetInstance().PostToMainThread(
-                    vis.get(), [mat, pointsO3dPtr_cpu](){
+                    vis.get(), [mat](){
                         std::lock_guard<std::mutex> lock (locker);
-                        vis->GetScene()->GetScene()->UpdateGeometry(cloudName,*pointsO3dPtr_cpu,
+                        vis->GetScene()->GetScene()->UpdateGeometry(cloudName,*pointsO3dPtr,
                                                         o3d_vis::rendering::Scene::kUpdatePointsFlag |
                                                                     o3d_vis::rendering::Scene::kUpdateColorsFlag);
                         vis->SetPointSize(2); // this calls ForceRedraw(), readily update the viewport.
