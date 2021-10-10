@@ -13,6 +13,20 @@
 namespace zed_utils {
     using namespace sl;
 
+    class Gaze{
+    private:
+        Eigen::Vector3f root;
+        Eigen::Vector3f direction; // to be normalized
+        Eigen::Matrix4f transformation; // z: normal outward from face, x: left eye to right eye (w.r.t actor)
+
+    public:
+        Gaze() = default;
+        Gaze(const sl::ObjectData& humanObject);
+        Eigen::Matrix4f getTransformation() const;
+
+
+
+    };
 
     void parseArgs(int argc, char **argv, sl::InitParameters &param);
 

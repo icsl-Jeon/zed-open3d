@@ -36,13 +36,47 @@ void o3d_utils::fromSlPoints(const sl::Mat &slPoints, open3d::geometry::PointClo
     std::cout << "points size = " << o3dPoints.points_.size() << std::endl;
 }
 
-void o3d_utils::fromSlObjects(const sl::ObjectData &object, open3d::geometry::LineSet &lineSet) {
+void o3d_utils::fromSlObjects(const sl::ObjectData &object,
+                              std::shared_ptr<open3d::geometry::LineSet>  lineSet,
+                              std::shared_ptr<open3d::geometry::TriangleMesh> attentionPointSet[4]
+                              ) {
+
+    lineSet->colors_.clear();
+    lineSet->points_.clear();
+    lineSet->lines_.clear();
 
     if (!object.keypoint.empty()) {
-        lineSet.colors_.clear();
-        lineSet.points_.clear();
-        for (const auto &pnt: object.keypoint)
-            lineSet.points_.emplace_back(Eigen::Vector3d(pnt.x, pnt.y, pnt.z));
+
+        int cntNanPoint = 0;
+        int index = 0 ;
+        for (const auto &pnt: object.keypoint) {
+            auto keyPnt = Eigen::Vector3d(pnt.x, pnt.y, pnt.z);
+            if ( not std::isfinite(keyPnt.norm())) {
+                cntNanPoint++;
+                // This zero-assigning is crucial!
+                // open3d seems to use all the points
+                // to decide the AABB
+                // even though a points is not assigned to any line
+                keyPnt = Eigen::Vector3d(0,0,0);
+            }else{
+
+                if (static_cast<BODY_PARTS>(index) == sl::BODY_PARTS::LEFT_EYE)
+                    attentionPointSet[0]->Translate(keyPnt,false);
+
+                if (static_cast<BODY_PARTS>(index) == sl::BODY_PARTS::RIGHT_EYE)
+                    attentionPointSet[1]->Translate(keyPnt,false);
+
+                if (static_cast<BODY_PARTS>(index) == sl::BODY_PARTS::LEFT_WRIST)
+                    attentionPointSet[2]->Translate(keyPnt,false);
+
+                if (static_cast<BODY_PARTS>(index) == sl::BODY_PARTS::RIGHT_WRIST)
+                    attentionPointSet[3]->Translate(keyPnt,false);
+
+            }
+            lineSet->points_.emplace_back(keyPnt);
+            index ++;
+        }
+
         for (auto &limb : o3d_utils::SKELETON_BONES) {
             int idx1 = getIdx(limb.first);
             int idx2 = getIdx(limb.second);
@@ -50,10 +84,25 @@ void o3d_utils::fromSlObjects(const sl::ObjectData &object, open3d::geometry::Li
             sl::float3 kp_2 = object.keypoint[idx2];
             // draw line between two keypoints
             if (std::isfinite(kp_1.norm()) && std::isfinite(kp_2.norm()))
-                lineSet.lines_.emplace_back(Eigen::Vector2i(idx1, idx2));
+                lineSet->lines_.emplace_back(Eigen::Vector2i(idx1, idx2));
         }
     }
-    lineSet.PaintUniformColor(Eigen::Vector3d(0,1,0));
+
+    /**
+    printf("--------------------------------\n");
+    for (auto line : lineSet.lines_) {
+        int idx1 = line(0); auto pnt1 = lineSet.points_[idx1];
+        int idx2 = line(1); auto pnt2 = lineSet.points_[idx2];
+        printf("(%.3f, %.3f, %.3f) -  (%.3f, %.3f, %.3f) \n ",
+               pnt1.x(), pnt1.y(), pnt1.z(),
+               pnt2.x(), pnt2.y(), pnt2.z());
+    }
+    **/
+    float r = 77.0 / 255.0;
+    float g = 143.0 / 255.0;
+    float b = 247.0 / 255.0;
+
+    lineSet->PaintUniformColor(Eigen::Vector3d(r,g,b));
 }
 
 

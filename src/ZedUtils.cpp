@@ -6,6 +6,7 @@
 
 #include <string>
 using namespace std;
+using namespace zed_utils;
 
 void zed_utils::parseArgs(int argc, char **argv,sl::InitParameters& param)
 {
@@ -51,7 +52,7 @@ bool zed_utils::initCamera(sl::Camera &zed, sl::InitParameters initParameters) {
 
     // Parameter setting
     initParameters.coordinate_units = sl::UNIT::METER;
-    initParameters.coordinate_system = sl::COORDINATE_SYSTEM::RIGHT_HANDED_Z_UP_X_FWD;
+//    initParameters.coordinate_system = sl::COORDINATE_SYSTEM::RIGHT_HANDED_Z_UP_X_FWD;
     initParameters.depth_mode = sl::DEPTH_MODE::ULTRA;
     initParameters.depth_maximum_distance = 5.0;
 
@@ -127,4 +128,45 @@ open3d::geometry::RGBDImage createFromZedImage(const cv::Mat& image, const cv::M
     memcpy(imageO3d.data_.data(), image.data, imageO3d.data_.size());
     memcpy(depthO3d.data_.data(), depth.data, depthO3d.data_.size());
     return *open3d::geometry::RGBDImage::CreateFromColorAndDepth(imageO3d, depthO3d);
+}
+
+Gaze::Gaze(const sl::ObjectData &humanObject) {
+    // todo transformation was not considered
+    auto keypoint = humanObject.keypoint;
+    sl::float3 landMarks[3] = {keypoint[int(sl::BODY_PARTS::LEFT_EYE)],
+                               keypoint[int(sl::BODY_PARTS::RIGHT_EYE)],
+                               keypoint[int(sl::BODY_PARTS::NOSE)]};
+    vector<Eigen::Vector3f> landMarksVec(3);
+
+    // root
+    root.setZero();
+    for (int i = 0; i < 3 ; i++){
+        landMarksVec[i] = Eigen::Vector3f(landMarks[i].x,
+                                          landMarks[i].y,
+                                          landMarks[i].z);
+        root+=landMarksVec[i];
+        }
+    root /= 3.0;
+
+    // direction
+    Eigen::Vector3f nose2eyes[2] = {
+                                    landMarksVec[0] - landMarksVec[2], // left
+                                    landMarksVec[1] - landMarksVec[2] // right
+                                    };
+    direction = nose2eyes[0].cross(nose2eyes[1]);
+    direction.normalize();
+
+    // transformation
+    Eigen::Vector3f ex = (landMarksVec[1] - landMarksVec[0]); ex.normalize();
+    Eigen::Vector3f ez = direction;
+    Eigen::Vector3f ey = ez.cross(ex); ey.normalize();
+    transformation = Eigen::Matrix4f::Identity();
+    transformation.block(0,3,3,1) = root; // translation
+    transformation.block(0,2,3,1) = direction; // ez
+    transformation.block(0,0,3,1) = ex; // from left to right
+    transformation.block(0,1,3,1) = ey;
+}
+
+Eigen::Matrix4f Gaze::getTransformation() const {
+    return transformation;
 }

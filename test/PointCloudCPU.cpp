@@ -34,7 +34,7 @@ void updateThread(){
     float fx = intrinsicParam.left_cam.fx;
     float fy = intrinsicParam.left_cam.fy;
     float cx = intrinsicParam.left_cam.cx;
-    float cy = intrinsicParam.left_cam.fy;
+    float cy = intrinsicParam.left_cam.cy;
 
     // buffer binding for cv objects
     cv::Mat imageCv = zed_utils::slMat2cvMat(image); // bound buffer (rgba)

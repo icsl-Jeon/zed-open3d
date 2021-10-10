@@ -1,6 +1,6 @@
 CMAKE_MINIMUM_REQUIRED(VERSION 3.19)
 PROJECT(ZED_OPEN3D)
-set(CMAKE_BUILD_TYPE debug)
+set(CMAKE_BUILD_TYPE release)
 
 
 find_package(ZED 3 REQUIRED)
@@ -29,12 +29,6 @@ message(STATUS " open3d library: ${Open3D_LIBRARIES}")
 
 
 include_directories(./include)
-add_executable(DrawPointCloud test/DrawPointCloud.cpp src/ZedUtils.cpp src/Misc.cpp src/Open3dUtils.cpp )
-target_link_libraries(DrawPointCloud PRIVATE  ${ZED_LIBS}   ${OpenCV_LIBRARIES} Open3D::Open3D )
-
-
-add_executable(DrawPointCloudGPU test/DrawPointCloudGPU.cpp src/ZedUtils.cpp src/Misc.cpp src/Open3dUtils.cpp )
-target_link_libraries(DrawPointCloudGPU PRIVATE  ${ZED_LIBS}   ${OpenCV_LIBRARIES} Open3D::Open3D ${CUDA_LIBRARIES} )
 
 add_executable(ImageCPU test/ImageCPU.cpp src/ZedUtils.cpp src/Misc.cpp src/Open3dUtils.cpp )
 target_link_libraries(ImageCPU PRIVATE  ${ZED_LIBS}   ${OpenCV_LIBRARIES} Open3D::Open3D ${CUDA_LIBRARIES})
@@ -47,6 +41,9 @@ target_link_libraries(PointCloudGPU PRIVATE  ${ZED_LIBS}   ${OpenCV_LIBRARIES} O
 
 add_executable(PointCloudCPU test/PointCloudCPU.cpp src/ZedUtils.cpp src/Misc.cpp src/Open3dUtils.cpp )
 target_link_libraries(PointCloudCPU PRIVATE  ${ZED_LIBS}   ${OpenCV_LIBRARIES} Open3D::Open3D ${CUDA_LIBRARIES})
+
+add_executable(HumanAttention test/HumanAttention.cpp src/ZedUtils.cpp src/Misc.cpp src/Open3dUtils.cpp )
+target_link_libraries(HumanAttention PRIVATE  ${ZED_LIBS}   ${OpenCV_LIBRARIES} Open3D::Open3D ${CUDA_LIBRARIES})
 
 add_executable(DrawAttention test/DrawAttention.cpp src/ZedUtils.cpp src/Misc.cpp src/Open3dUtils.cpp )
 target_link_libraries(DrawAttention PRIVATE  ${ZED_LIBS}   ${OpenCV_LIBRARIES} Open3D::Open3D )
