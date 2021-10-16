@@ -165,8 +165,22 @@ Gaze::Gaze(const sl::ObjectData &humanObject) {
     transformation.block(0,2,3,1) = direction; // ez
     transformation.block(0,0,3,1) = ex; // from left to right
     transformation.block(0,1,3,1) = ey;
+
+    // down from normal vector of eyes - nose
+    float noseDownAngle = 30 * M_PI / 180.0;
+    Eigen::Matrix4f T = Eigen::Matrix4f::Identity();
+    Eigen::Matrix2f R;
+    R << cos(noseDownAngle) , sin(noseDownAngle) ,
+         -sin(noseDownAngle) , cos(noseDownAngle);
+    T.block(1,1,2,2) = R;
+    transformation = transformation * T;
 }
 
 Eigen::Matrix4f Gaze::getTransformation() const {
     return transformation;
+}
+
+
+bool Gaze::isValid() {
+    return not (isinf(transformation.norm()) or isnan(transformation.norm())) ;
 }

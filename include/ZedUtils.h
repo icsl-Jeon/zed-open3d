@@ -23,6 +23,7 @@ namespace zed_utils {
         Gaze() = default;
         Gaze(const sl::ObjectData& humanObject);
         Eigen::Matrix4f getTransformation() const;
+        bool isValid();
 
 
 

@@ -156,8 +156,10 @@ void updateThread(){
                             for (int i = 0; i<4 ;i++)
                                 vis->AddGeometry(attentionName[i],attentionPointSet[i],&matAttention);
                             *gazeCoordinate = *o3d_legacy::TriangleMesh::CreateCoordinateFrame(0.1);
-                            gazeCoordinate->Transform(gaze.getTransformation().cast<double>());
-                            vis->AddGeometry(gazeName,gazeCoordinate,&mat);
+                            if (gaze.isValid()) {
+                                gazeCoordinate->Transform(gaze.getTransformation().cast<double>());
+                                vis->AddGeometry(gazeName, gazeCoordinate, &mat);
+                            }
                         }
                         vis->ResetCameraToDefault();
                         vis->SetupCamera(60,pointsCenterEigen,eye,{0.0, -1.0, 0.0});
@@ -179,16 +181,18 @@ void updateThread(){
                             // Idk why.. but
                             vis->RemoveGeometry(skeletonName);
                             vis->AddGeometry(skeletonName, skeletonO3dPtr, &matLine);
-
+                            // visualizing attention points
                             for (int i = 0; i<4 ;i++) {
                                 vis->RemoveGeometry(attentionName[i]);
                                 vis->AddGeometry(attentionName[i], attentionPointSet[i], &matAttention);
                             }
-
-                            vis->RemoveGeometry(gazeName);
-                            *gazeCoordinate = *o3d_legacy::TriangleMesh::CreateCoordinateFrame(0.1);
-                            gazeCoordinate->Transform(gaze.getTransformation().cast<double>());
-                            vis->AddGeometry(gazeName,gazeCoordinate,&mat);
+                            if (gaze.isValid()) {
+                                // visualizing gaze coordinate
+                                vis->RemoveGeometry(gazeName);
+                                *gazeCoordinate = *o3d_legacy::TriangleMesh::CreateCoordinateFrame(0.1);
+                                gazeCoordinate->Transform(gaze.getTransformation().cast<double>());
+                                vis->AddGeometry(gazeName, gazeCoordinate, &mat);
+                            }
                         }
                         vis->SetPointSize(1); // this calls ForceRedraw(), readily update the viewport.
 //                        vis->SetLineWidth(3);
