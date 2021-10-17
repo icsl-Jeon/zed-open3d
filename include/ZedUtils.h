@@ -7,7 +7,8 @@
 #include <opencv2/highgui.hpp>
 #include <opencv2/cvconfig.h>
 #include "opencv2/cudaimgproc.hpp"
-
+#include <opencv2/cudawarping.hpp>
+#include "darknet/yolo_v2_class.hpp"
 
 
 namespace zed_utils {
@@ -25,8 +26,6 @@ namespace zed_utils {
         Eigen::Matrix4f getTransformation() const;
         bool isValid();
 
-
-
     };
 
     void parseArgs(int argc, char **argv, sl::InitParameters &param);
@@ -40,8 +39,6 @@ namespace zed_utils {
     int getOCVtype(sl::MAT_TYPE type);
 
     open3d::geometry::RGBDImage createFromCvImage(const cv::Mat &image, const cv::Mat &depth);
-
-
 
 
 

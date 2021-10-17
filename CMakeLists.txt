@@ -2,6 +2,25 @@ CMAKE_MINIMUM_REQUIRED(VERSION 3.19)
 PROJECT(ZED_OPEN3D)
 set(CMAKE_BUILD_TYPE release)
 
+set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake/")
+message("${CMAKE_MODULE_PATH}")
+
+# For linking darknet (TODO: FindDarknet).
+set(DARKNET_PATH /home/jbs/catkin_ws/src/darknet)
+set(DARKNET_LIB libdarknet)
+include_directories(${DARKNET_PATH}/include)
+
+add_library(${DARKNET_LIB} SHARED IMPORTED)
+set_property(
+        TARGET ${DARKNET_LIB}
+        PROPERTY IMPORTED_LOCATION
+        "${DARKNET_PATH}/libdarknet.so"
+)
+
+# TODO
+#find_package(Darknet)
+#message("darknet: ${Darknet_INCLUDE_DIRS}")
+#include_directories(${Darknet_INCLUDE_DIRS})
 
 find_package(ZED 3 REQUIRED)
 include_directories(${ZED_INCLUDE_DIRS})
@@ -48,3 +67,5 @@ target_link_libraries(HumanAttention PRIVATE  ${ZED_LIBS}   ${OpenCV_LIBRARIES} 
 add_executable(DrawAttention test/DrawAttention.cpp src/ZedUtils.cpp src/Misc.cpp src/Open3dUtils.cpp )
 target_link_libraries(DrawAttention PRIVATE  ${ZED_LIBS}   ${OpenCV_LIBRARIES} Open3D::Open3D )
 
+add_executable(OoiExtractor test/OoiExtractor.cpp src/ZedUtils.cpp src/Misc.cpp src/Open3dUtils.cpp )
+target_link_libraries(OoiExtractor PRIVATE  ${ZED_LIBS}   ${OpenCV_LIBRARIES} Open3D::Open3D ${CUDA_LIBRARIES} ${DARKNET_LIB} )
