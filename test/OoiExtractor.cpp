@@ -13,9 +13,10 @@ sl::Camera zed;
 zed_utils::Gaze gaze;
 
 std::shared_ptr<o3d_tensor::PointCloud> pointsO3dPtr;
+std::shared_ptr<o3d_tensor::PointCloud> objPointsO3dPtr;
+std::shared_ptr<o3d_legacy::PointCloud> objPointsO3dPtr_cpu;
 std::shared_ptr<o3d_legacy::LineSet> skeletonO3dPtr ; // object skeleton
 std::shared_ptr<o3d_vis::visualizer::O3DVisualizer> vis;
-std::shared_ptr<o3d_vis::visualizer::O3DVisualizer> vis_img;
 std::shared_ptr<o3d_legacy::TriangleMesh> attentionPointSet[4]; // left eye, right eye, left wrist, right wrist
 std::shared_ptr<o3d_legacy::TriangleMesh> gazeCoordinate;
 
@@ -137,6 +138,9 @@ void updateThread(){
                                         depthBlob->GetDataPtr(),depthType,depthBlob);
     o3d_tensor::Image depthO3d(depthTensor);
 
+    auto nanTensor = o3d_core::Tensor::Full({row,col,1} ,NAN, depthType,device_gpu);
+
+
     // pointcloud construction
     auto rgbdO3dPtr_cpu = std::make_shared<o3d_legacy::RGBDImage>();
 
@@ -175,15 +179,19 @@ void updateThread(){
             imageCv3Ch.download(imageCv3Ch_cpu);
             auto isObjectSuccess = zed.retrieveObjects(humanObjects,objectParameters);
 
+            double projectionElapse;
             // construct pointcloud. We lock with the same mutex in the posted thread on visualizer
             {
                 std::lock_guard<std::mutex> lock(locker);
 
                 o3d_tensor::RGBDImage rgbdImage (imageO3d,depthO3d);
+                misc::Timer timerPclFromRGBD;
                 *pointsO3dPtr = (o3d_tensor::PointCloud::CreateFromRGBDImage(rgbdImage,
                                                                          intrinsicO3dTensor, extrinsicO3dTensor,
                                                                          1, 3, 2));
-                
+
+
+
                 if (not humanObjects.object_list.empty()) {
                     o3d_utils::fromSlObjects(humanObjects.object_list[0],
                                              skeletonO3dPtr, attentionPointSet);
@@ -191,7 +199,7 @@ void updateThread(){
                     isObject = true;
                 }
             }
-            printf("Image + depth + points + objects retrieved in %.3f ms. \n" ,timer.stop());
+            printf("Image + depth + points + objects retrieved in %.3f ms. (pcl proj = %.3f ms) \n" ,timer.stop(),projectionElapse);
 
             // not mandatory..
             misc::Timer timerVis;
@@ -219,6 +227,29 @@ void updateThread(){
             cv::imshow("object detection",imageDetectCv3ch_cpu);
             cv::waitKey(1);
 
+            // Extract points of detected objects
+            misc::Timer timerObjPointsExtraction;
+            auto objectsDepth = nanTensor.Clone();
+            for (const auto& bb : resultBoundingBox){
+                if (bb.obj_id == 39 ) { // 39 = bottle
+                    auto bb_1_window = o3d_core::TensorKey::Slice(bb.y, bb.y + bb.h, 1);
+                    auto bb_2_window = o3d_core::TensorKey::Slice(bb.x, bb.x + bb.w, 1);
+                    objectsDepth.SetItem({bb_1_window, bb_2_window},
+                                         depthTensor.GetItem({bb_1_window, bb_2_window}));
+                }
+            }
+
+            *objPointsO3dPtr = o3d_tensor::PointCloud::CreateFromDepthImage(objectsDepth,
+                                                                            intrinsicO3dTensor,extrinsicO3dTensor,
+                                                                            1,3,1);
+            *objPointsO3dPtr_cpu  = objPointsO3dPtr->ToLegacy();
+            objPointsO3dPtr_cpu->PaintUniformColor({0,1,0});
+            double elapse = timerObjPointsExtraction.stop();
+            printf("%zu object points / %zu   processing : %.3f ms \n ",
+                   objPointsO3dPtr_cpu->points_.size(),
+                   pointsO3dPtr->GetPointPositions().GetLength(),
+                   elapse);
+
             // initialize viewport
             if (not isInit){
                 // Dummay operation to initialize cuda scope for .ToLegacy()
@@ -237,6 +268,8 @@ void updateThread(){
                         vis->AddGeometry("coordinate",
                                 o3d_legacy::TriangleMesh::CreateCoordinateFrame(0.1)); // add coord at origin
                         vis->AddGeometry(cloudName,pointsO3dPtr_cpu, &mat);
+                        vis->AddGeometry(cloudName + "_objects",objPointsO3dPtr_cpu, &mat);
+
                         if (isObject) {
                             vis->AddGeometry(skeletonName, skeletonO3dPtr, &matLine);
                             for (int i = 0; i<4 ;i++)
@@ -257,8 +290,10 @@ void updateThread(){
                     vis.get(), [mat, matLine, matAttention, pointsO3dPtr_cpu, isObject](){
                         std::lock_guard<std::mutex> lock (locker);
                         vis->RemoveGeometry(cloudName);
-                        vis->AddGeometry(cloudName,pointsO3dPtr_cpu, &mat);
+                        vis->RemoveGeometry(cloudName+"_objects");
 
+                        vis->AddGeometry(cloudName,pointsO3dPtr_cpu, &mat);
+                        vis->AddGeometry(cloudName + "_objects",objPointsO3dPtr_cpu, &mat);
 //                        vis->GetScene()->GetScene()->UpdateGeometry(cloudName,*pointsO3dPtr_cpu,
 //                                                        o3d_vis::rendering::Scene::kUpdatePointsFlag |
 //                                                                    o3d_vis::rendering::Scene::kUpdateColorsFlag);
@@ -302,8 +337,8 @@ int main(int argc, char** argv) {
     // Darknet (this should be instantiated first due to cuda context problem)
     string darknetPath = "/home/jbs/catkin_ws/src/darknet/";
     string  namesFile = darknetPath + "data/coco.names";
-    string cfgFile = darknetPath + "cfg/yolov4.cfg";
-    string weightsFile = darknetPath + "yolov4.weights";
+    string cfgFile = darknetPath + "cfg/yolov4-tiny.cfg"; // only tiny fits for fast displaying
+    string weightsFile = darknetPath + "yolov4-tiny.weights";
     yoloDetectorPtr = new Detector(cfgFile, weightsFile); // take a bit for initialization
     ifstream  file(namesFile);
     for(std::string line; getline(file, line);)
@@ -321,6 +356,8 @@ int main(int argc, char** argv) {
 
     // Initialize open3d
     pointsO3dPtr = std::make_shared<o3d_tensor::PointCloud>();
+    objPointsO3dPtr = std::make_shared<o3d_tensor::PointCloud>();
+    objPointsO3dPtr_cpu = std::make_shared<o3d_legacy::PointCloud>();
     skeletonO3dPtr = std::make_shared<o3d_legacy::LineSet>();
     gazeCoordinate = std::make_shared<o3d_legacy::TriangleMesh>();
 

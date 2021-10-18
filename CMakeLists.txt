@@ -1,6 +1,6 @@
 CMAKE_MINIMUM_REQUIRED(VERSION 3.19)
 PROJECT(ZED_OPEN3D)
-set(CMAKE_BUILD_TYPE release)
+set(CMAKE_BUILD_TYPE debug)
 
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake/")
 message("${CMAKE_MODULE_PATH}")
@@ -54,6 +54,9 @@ target_link_libraries(ImageCPU PRIVATE  ${ZED_LIBS}   ${OpenCV_LIBRARIES} Open3D
 
 add_executable(ImageGPU test/ImageGPU.cpp src/ZedUtils.cpp src/Misc.cpp src/Open3dUtils.cpp )
 target_link_libraries(ImageGPU PRIVATE  ${ZED_LIBS}   ${OpenCV_LIBRARIES} Open3D::Open3D ${CUDA_LIBRARIES})
+
+add_executable(ImageGPU_ops test/ImageGPU_ops.cpp src/ZedUtils.cpp src/Misc.cpp src/Open3dUtils.cpp )
+target_link_libraries(ImageGPU_ops PRIVATE  ${ZED_LIBS}   ${OpenCV_LIBRARIES} Open3D::Open3D ${CUDA_LIBRARIES})
 
 add_executable(PointCloudGPU test/PointCloudGPU.cpp src/ZedUtils.cpp src/Misc.cpp src/Open3dUtils.cpp )
 target_link_libraries(PointCloudGPU PRIVATE  ${ZED_LIBS}   ${OpenCV_LIBRARIES} Open3D::Open3D ${CUDA_LIBRARIES})

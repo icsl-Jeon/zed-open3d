@@ -56,8 +56,6 @@ int main(int argc, char** argv) {
                       depthBlob->GetDataPtr(),depthType,depthBlob);
     o3d_tensor::Image depthO3d(depthTensor);
 
-
-
     // just for visualization in open3d
     open3d::visualization::Visualizer vis;
     bool isInit = false;
@@ -77,6 +75,16 @@ int main(int argc, char** argv) {
             bool isContinuous3ch =  imageCv3Ch.isContinuous();
             bool isContinuousDepth = depthCv.isContinuous();
 
+
+            /////////////////////////////////////
+            // Example operation : setting nan //
+            /////////////////////////////////////
+
+            auto nanTensor = o3d_core::Tensor::Full({400,200,1} ,NAN, depthType,device_gpu);
+            depthTensor.SetItem({o3d_core::TensorKey::Slice(300,700,1),
+                                         o3d_core::TensorKey::Slice(500,700,1)},
+                                nanTensor);
+
             printf("Image + depth retrieved in %.3f ms. \n" ,timer.stop());
 
             if (not isInit){
@@ -85,8 +93,8 @@ int main(int argc, char** argv) {
                 o3d_core::Tensor tensorRgbDummy(
                         (imageCv3Ch_cpu.data), {row,col,3},rgbType,device_gpu);
 
-//                vis.AddGeometry(depthO3d_cpu);
-                vis.AddGeometry(imageO3d_cpu);
+                vis.AddGeometry(depthO3d_cpu);
+//                vis.AddGeometry(imageO3d_cpu);
                 isInit = true;
             }
 
