@@ -12,9 +12,16 @@ namespace o3d_vis = open3d::visualization;
 sl::Camera zed;
 zed_utils::Gaze gaze;
 
+const int nMaxOoiClusters = 4;
+int nOoiClustersPrev = 0;
+bool drawHistogram = false;
+
 std::shared_ptr<o3d_tensor::PointCloud> pointsO3dPtr;
 std::shared_ptr<o3d_tensor::PointCloud> objPointsO3dPtr;
-std::shared_ptr<o3d_legacy::PointCloud> objPointsO3dPtr_cpu;
+std::shared_ptr<o3d_legacy::PointCloud> objPointsO3dPtr_cpu[nMaxOoiClusters];
+std::shared_ptr<o3d_legacy::AxisAlignedBoundingBox> objBbO3dPtr[nMaxOoiClusters];
+cv::Mat objPixelMask[nMaxOoiClusters];
+
 std::shared_ptr<o3d_legacy::LineSet> skeletonO3dPtr ; // object skeleton
 std::shared_ptr<o3d_vis::visualizer::O3DVisualizer> vis;
 std::shared_ptr<o3d_legacy::TriangleMesh> attentionPointSet[4]; // left eye, right eye, left wrist, right wrist
@@ -89,6 +96,7 @@ void updateThread(){
     const int col = imageResultion.width;
     sl::Mat image(cameraConfig.resolution.width, cameraConfig.resolution.height, sl::MAT_TYPE::U8_C4,  sl::MEM::GPU);
     sl::Mat depth(cameraConfig.resolution.width, cameraConfig.resolution.height, sl::MAT_TYPE::F32_C1, sl::MEM::GPU);
+    sl::Mat points;
     sl::Objects humanObjects;
     sl::Pose zedPose;
 
@@ -103,7 +111,10 @@ void updateThread(){
     cv::cuda::GpuMat depthCv = zed_utils::slMat2cvMatGPU(depth); // bound buffer
     cv::cuda::GpuMat imageCv3Ch = cv::cuda::createContinuous(row,col,CV_8UC3);
     cv::Mat imageCv3Ch_cpu; // will not be used. But needed for cuda scope
+    cv::Mat depthCv_cpu;
     cv::Mat imageDetectCv3ch_cpu;
+    cv::Mat depthDetectCv_cpu;
+    cv::Mat depthColorized_cpu;
 
     // darknet objects
     cv::Size network_size = cv::Size(yoloDetectorPtr->get_net_width(),
@@ -137,9 +148,7 @@ void updateThread(){
     auto depthTensor = o3d_core::Tensor({row,col,1}, {col,1,1},
                                         depthBlob->GetDataPtr(),depthType,depthBlob);
     o3d_tensor::Image depthO3d(depthTensor);
-
     auto nanTensor = o3d_core::Tensor::Full({row,col,1} ,NAN, depthType,device_gpu);
-
 
     // pointcloud construction
     auto rgbdO3dPtr_cpu = std::make_shared<o3d_legacy::RGBDImage>();
@@ -176,7 +185,6 @@ void updateThread(){
             zed.retrieveImage(image,sl::VIEW::LEFT,sl::MEM::GPU);
             zed.retrieveMeasure(depth, sl::MEASURE::DEPTH, sl::MEM::GPU);
             cv::cuda::cvtColor(imageCv, imageCv3Ch,cv::COLOR_BGRA2RGB);
-            imageCv3Ch.download(imageCv3Ch_cpu);
             auto isObjectSuccess = zed.retrieveObjects(humanObjects,objectParameters);
 
             double projectionElapse;
@@ -189,8 +197,6 @@ void updateThread(){
                 *pointsO3dPtr = (o3d_tensor::PointCloud::CreateFromRGBDImage(rgbdImage,
                                                                          intrinsicO3dTensor, extrinsicO3dTensor,
                                                                          1, 3, 2));
-
-
 
                 if (not humanObjects.object_list.empty()) {
                     o3d_utils::fromSlObjects(humanObjects.object_list[0],
@@ -207,7 +213,16 @@ void updateThread(){
             printf("cpu transfer took %.3f ms. (only for visualization)\n" ,timerVis.stop());
 
             // detect in Darknet
+            depthCv.download(depthCv_cpu); // depthCv = war depth
+            depthDetectCv_cpu  = depthCv_cpu.clone() ;
+            depthDetectCv_cpu.convertTo(depthDetectCv_cpu,CV_8UC3,255, 0); // modified for visualization
+            cv::cvtColor(depthDetectCv_cpu,depthDetectCv_cpu,cv::COLOR_GRAY2BGR); // modified for visualization
+//            cv::imshow("depth",depthDetectCv_cpu);
+//            cv::waitKey(1);
+
             misc::Timer timerDetect;
+            imageCv3Ch.download(imageCv3Ch_cpu);
+            imageCv3Ch.download(imageCv3Ch_cpu);
             imageDetectCv3ch_cpu = imageCv3Ch_cpu.clone();
             cv::cvtColor(imageDetectCv3ch_cpu,imageDetectCv3ch_cpu,cv::COLOR_RGB2BGR);
             cv::cuda::resize(imageCv3Ch,resizedImage,network_size);
@@ -222,106 +237,164 @@ void updateThread(){
             std::vector<bbox_t> resultBoundingBox =
                     yoloDetectorPtr->detect_resized(*imageDarknet,imageCv.cols,imageCv.rows,threshold,true);
             resultBoundingBox = yoloDetectorPtr->tracking_id(resultBoundingBox);
-            draw_boxes(imageDetectCv3ch_cpu, resultBoundingBox, objectNames);
-            printf("object detection in %.3f ms. \n" ,timerDetect.stop());
-            cv::imshow("object detection",imageDetectCv3ch_cpu);
-            cv::waitKey(1);
 
             // Extract points of detected objects
             misc::Timer timerObjPointsExtraction;
-            auto objectsDepth = nanTensor.Clone();
+            float scale = 0.8; // scaling dimensions by this
+            int nClusterOoi = 0;
+            int nTotalPntsOoi = 0;
             for (const auto& bb : resultBoundingBox){
-                if (bb.obj_id == 39 ) { // 39 = bottle
-                    auto bb_1_window = o3d_core::TensorKey::Slice(bb.y, bb.y + bb.h, 1);
-                    auto bb_2_window = o3d_core::TensorKey::Slice(bb.x, bb.x + bb.w, 1);
+                if (bb.obj_id == 39 and (nClusterOoi < nMaxOoiClusters)) { // 39 = bottle
+                    objPixelMask[nClusterOoi] =
+                            cv::Mat(imageCv.rows,imageCv.cols,CV_8UC1,cv::Scalar(0));// initialize object mask
+
+                    cv::Range rowRange(
+                            bb.y+ bb.h * (1 - scale) / 2.0,bb.y + bb.h - bb.h * (1 - scale) / 2.0 );
+                    cv::Range colRange (
+                            bb.x+ bb.w * (1 - scale) / 2.0,bb.x + bb.w - bb.w * (1 - scale) / 2.0 );
+
+                    cv::Mat subMat = depthCv_cpu(rowRange,colRange);
+                    cv::Mat subMask;
+                    cv::MatND histogram;
+                    float channel_range[2] = { 0.3 , 5.0 };
+                    const float* channel_ranges[1] = { channel_range };
+                    int histSize[1] = { 50 };
+                    int channel[1] = { 0 };  // Blue
+                    cv::calcHist(&subMat,1,channel,cv::Mat(),histogram,1,histSize,channel_ranges);
+                    histogram.at<float>(0) = 0 ; // garbage values suppressed
+                    auto histDataPtr = (float *) histogram.data;
+                    vector<float> histData(histDataPtr, histDataPtr + histSize[0]);
+                    int peakIdx = max_element(histData.begin(),histData.end()) - histData.begin();
+                    float peakDepth = channel_range[0] +  (channel_range[1]- channel_range[0]) / float(histSize[0]) * peakIdx;
+
+                    cv::inRange(subMat,
+                                cv::Scalar (-0.3 + peakDepth),cv::Scalar (0.3+peakDepth),
+                                subMask);
+
+                    // visualizing masked pixel
+                    float alpha = 0.5;
+                    auto maskDataPtr = (uchar * ) subMask.data;
+                    for (int rr = 0 ; rr < rowRange.size() ; rr++)
+                        for (int cc = 0; cc < colRange.size(); cc++)
+                            if (maskDataPtr[rr *colRange.size() + cc]){
+                                auto& bgr = depthDetectCv_cpu.at<cv::Vec3b>(rr + rowRange.start,
+                                                                cc + colRange.start);
+                                int colorIdx = 2; // red
+                                bgr(colorIdx) = (1-alpha)*bgr(colorIdx) + alpha * 255;
+                            }
+
+                    // plot the histogram in imshow (todo make func)
+                    if (drawHistogram) {
+                        int hist_w = 600;
+                        int hist_h = 400;
+                        int bin_w = cvRound((double) hist_w / histSize[0]);
+
+                        cv::Mat hist_img(hist_h, hist_w, CV_8UC1, cv::Scalar::all(0));
+                        cv::normalize(histogram, histogram, 0, hist_img.rows, cv::NORM_MINMAX);
+
+                        for (int i = 1; i < histSize[0]; i++) {
+                            line(hist_img, cv::Point(bin_w * (i - 1), hist_h - cvRound(histogram.at<float>(i - 1))),
+                                 cv::Point(bin_w * (i),
+                                           hist_h - cvRound(histogram.at<float>(i))),
+                                 cv::Scalar(255, 0, 0), 1, 8, 0);
+                        }
+                        cv::imshow("histogram_" + to_string(nClusterOoi), hist_img);
+                        cv::waitKey(1);
+                    }
+                    /**
+                    auto objectsDepth = nanTensor.Clone();
+                    auto bb_1_window = o3d_core::TensorKey::Slice(bb.y+ bb.h * (1 - scale) / 2.0,
+                                                                  bb.y + bb.h - bb.h * (1 - scale) / 2.0,
+                                                                  1);
+                    auto bb_2_window = o3d_core::TensorKey::Slice(bb.x + bb.w * (1 - scale) / 2.0,
+                                                                  bb.x + bb.w - bb.w * (1 - scale) / 2.0,
+                                                                  1);
                     objectsDepth.SetItem({bb_1_window, bb_2_window},
                                          depthTensor.GetItem({bb_1_window, bb_2_window}));
-                }
+
+                    *objPointsO3dPtr = o3d_tensor::PointCloud::CreateFromDepthImage(objectsDepth,
+                                                                                    intrinsicO3dTensor,extrinsicO3dTensor,
+                                                                                    1,3,1);
+
+                    *objPointsO3dPtr_cpu[nClusterOoi] = objPointsO3dPtr->ToLegacy(); // raw points
+                    **/
+
+                    nClusterOoi ++;
+                } // if bottle
             }
 
-            *objPointsO3dPtr = o3d_tensor::PointCloud::CreateFromDepthImage(objectsDepth,
-                                                                            intrinsicO3dTensor,extrinsicO3dTensor,
-                                                                            1,3,1);
-            *objPointsO3dPtr_cpu  = objPointsO3dPtr->ToLegacy();
-            objPointsO3dPtr_cpu->PaintUniformColor({0,1,0});
+
+            draw_boxes(depthDetectCv_cpu, resultBoundingBox, objectNames);
+            printf("object detection in %.3f ms. \n" ,timerDetect.stop());
+            cv::imshow("object detection",depthDetectCv_cpu);
+            cv::waitKey(1);
+
             double elapse = timerObjPointsExtraction.stop();
-            printf("%zu object points / %zu   processing : %.3f ms \n ",
-                   objPointsO3dPtr_cpu->points_.size(),
+            printf("%zu cluster of ooi  (total points %zu) processing : %.3f ms \n ",
+                   nClusterOoi,
                    pointsO3dPtr->GetPointPositions().GetLength(),
                    elapse);
 
+
+
             // initialize viewport
-            if (not isInit){
+            if (not isInit) {
                 // Dummay operation to initialize cuda scope for .ToLegacy()
                 o3d_core::Tensor tensorRgbDummy(
-                        (imageCv3Ch_cpu.data), {row,col,3},rgbType,device_gpu);
+                        (imageCv3Ch_cpu.data), {row, col, 3}, rgbType, device_gpu);
+                isInit = true;
 
-                // configure initial viewpoint
                 auto pointsCenter = pointsO3dPtr->GetCenter();
                 auto centerCPU = pointsCenter.ToFlatVector<float>();
                 Eigen::Vector3f pointsCenterEigen(centerCPU[0],centerCPU[1],centerCPU[2]);
                 Eigen::Vector3f eye = pointsCenterEigen + Eigen::Vector3f(0,0,-3);
 
                 o3d_vis::gui::Application::GetInstance().PostToMainThread(
-                    vis.get(), [mat, matLine, matAttention, pointsCenterEigen,eye,pointsO3dPtr_cpu, isObject](){
+                        vis.get(), [pointsCenterEigen,eye, pointsO3dPtr_cpu, mat](){
+                        vis->AddGeometry(cloudName,pointsO3dPtr_cpu, &mat); // this is important! as visible range is determined
+                        vis->ResetCameraToDefault();
+                        vis->SetupCamera(60,pointsCenterEigen,eye,{0.0, -1.0, 0.0});
+                });
+            }
+
+            // Draw in the view port
+            o3d_vis::gui::Application::GetInstance().PostToMainThread(
+                    vis.get(), [mat, matLine, matAttention, pointsO3dPtr_cpu, isObject](){
                         std::lock_guard<std::mutex> lock (locker);
+                        // flushing
+                        for (auto geoNames: vis->GetScene()->GetGeometries())
+                            vis->RemoveGeometry(geoNames);
+
+                        // coordinates
                         vis->AddGeometry("coordinate",
-                                o3d_legacy::TriangleMesh::CreateCoordinateFrame(0.1)); // add coord at origin
+                                         o3d_legacy::TriangleMesh::CreateCoordinateFrame(0.1)); // add coord at origin
                         vis->AddGeometry(cloudName,pointsO3dPtr_cpu, &mat);
-                        vis->AddGeometry(cloudName + "_objects",objPointsO3dPtr_cpu, &mat);
 
                         if (isObject) {
+                            // skeleton
                             vis->AddGeometry(skeletonName, skeletonO3dPtr, &matLine);
+                            // attention points (hands + eyes )
                             for (int i = 0; i<4 ;i++)
                                 vis->AddGeometry(attentionName[i],attentionPointSet[i],&matAttention);
+                            // gaze coordinate
                             *gazeCoordinate = *o3d_legacy::TriangleMesh::CreateCoordinateFrame(0.1);
                             if (gaze.isValid()) {
                                 gazeCoordinate->Transform(gaze.getTransformation().cast<double>());
                                 vis->AddGeometry(gazeName, gazeCoordinate, &mat);
                             }
                         }
-                        vis->ResetCameraToDefault();
-                        vis->SetupCamera(60,pointsCenterEigen,eye,{0.0, -1.0, 0.0});
-                    }
-                );
-                isInit = true;
-            }else{
-                o3d_vis::gui::Application::GetInstance().PostToMainThread(
-                    vis.get(), [mat, matLine, matAttention, pointsO3dPtr_cpu, isObject](){
-                        std::lock_guard<std::mutex> lock (locker);
-                        vis->RemoveGeometry(cloudName);
-                        vis->RemoveGeometry(cloudName+"_objects");
 
-                        vis->AddGeometry(cloudName,pointsO3dPtr_cpu, &mat);
-                        vis->AddGeometry(cloudName + "_objects",objPointsO3dPtr_cpu, &mat);
-//                        vis->GetScene()->GetScene()->UpdateGeometry(cloudName,*pointsO3dPtr_cpu,
-//                                                        o3d_vis::rendering::Scene::kUpdatePointsFlag |
-//                                                                    o3d_vis::rendering::Scene::kUpdateColorsFlag);
-
-                        if (isObject) {
-                            // Idk why.. but
-                            vis->RemoveGeometry(skeletonName);
-                            vis->AddGeometry(skeletonName, skeletonO3dPtr, &matLine);
-                            // visualizing attention points
-                            for (int i = 0; i<4 ;i++) {
-                                vis->RemoveGeometry(attentionName[i]);
-                                vis->AddGeometry(attentionName[i], attentionPointSet[i], &matAttention);
-                            }
-                            if (gaze.isValid()) {
-                                // visualizing gaze coordinate
-                                vis->RemoveGeometry(gazeName);
-                                *gazeCoordinate = *o3d_legacy::TriangleMesh::CreateCoordinateFrame(0.1);
-                                gazeCoordinate->Transform(gaze.getTransformation().cast<double>());
-                                vis->AddGeometry(gazeName, gazeCoordinate, &mat);
-                            }
-                        }
+                        // force redraw
                         vis->SetPointSize(1); // this calls ForceRedraw(), readily update the viewport.
+                        vis->SetLineWidth(2);
 //                        vis->SetLineWidth(3);
                         vis->SetBackground({0,0,0,1});
-                    }
-                );
 
-            }
+                    } // lambda function body
+            );
+
+
+
         }else if (zed.grab(runParameters) == sl::ERROR_CODE::END_OF_SVOFILE_REACHED){
             printf("SVO reached end. Replay. \n");
             zed.setSVOPosition(1);
@@ -337,8 +410,8 @@ int main(int argc, char** argv) {
     // Darknet (this should be instantiated first due to cuda context problem)
     string darknetPath = "/home/jbs/catkin_ws/src/darknet/";
     string  namesFile = darknetPath + "data/coco.names";
-    string cfgFile = darknetPath + "cfg/yolov4-tiny.cfg"; // only tiny fits for fast displaying
-    string weightsFile = darknetPath + "yolov4-tiny.weights";
+    string cfgFile = darknetPath + "cfg/yolov4.cfg"; // only tiny fits for fast displaying
+    string weightsFile = darknetPath + "yolov4.weights";
     yoloDetectorPtr = new Detector(cfgFile, weightsFile); // take a bit for initialization
     ifstream  file(namesFile);
     for(std::string line; getline(file, line);)
@@ -357,7 +430,10 @@ int main(int argc, char** argv) {
     // Initialize open3d
     pointsO3dPtr = std::make_shared<o3d_tensor::PointCloud>();
     objPointsO3dPtr = std::make_shared<o3d_tensor::PointCloud>();
-    objPointsO3dPtr_cpu = std::make_shared<o3d_legacy::PointCloud>();
+    for (int nn = 0 ; nn < nMaxOoiClusters ; nn++) {
+        objPointsO3dPtr_cpu[nn] = std::make_shared<o3d_legacy::PointCloud>();
+        objBbO3dPtr[nn] = std::make_shared<o3d_legacy::AxisAlignedBoundingBox>();
+    }
     skeletonO3dPtr = std::make_shared<o3d_legacy::LineSet>();
     gazeCoordinate = std::make_shared<o3d_legacy::TriangleMesh>();
 

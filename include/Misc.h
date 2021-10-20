@@ -5,8 +5,18 @@
 #ifndef ZED_OPEN3D_MISC_H
 #define ZED_OPEN3D_MISC_H
 
+#define UNCLASSIFIED -1
+#define NOISE -2
+#define CLUSTER_SUCCESS 0
+#define FAILURE -3
+
 #include <chrono>
+#include <vector>
+#include <cmath>
+
 using namespace std::chrono;
+using namespace std;
+
 namespace misc {
     class Timer {
         steady_clock::time_point t0;
@@ -22,6 +32,52 @@ namespace misc {
             return measuredTime;
         }
     };
+
+
+    int const clusterColors[6][3] = { { 1,0,1 },{ 0,0,1 },{ 0,1,1 },{ 0,1,0 },{ 1,1,0 },{ 1,0,0 } };
+
+    typedef struct Point_
+    {
+        float depth;
+        uint u ; // pixel index
+        uint v ; // pixel index
+        int clusterID;  // clustered ID
+    }DepthPoint;
+
+    class DBSCAN {
+    public:
+        DBSCAN(unsigned int minPts, float eps, vector<DepthPoint> points){
+            m_minPoints = minPts;
+            m_epsilon = eps;
+            m_points = points;
+            m_pointSize = points.size();
+        }
+        ~DBSCAN(){}
+
+        int run();
+        vector<int> calculateCluster(DepthPoint point);
+        int expandCluster(DepthPoint point, int clusterID);
+        inline double calculateDistance(const DepthPoint& pointCore, const DepthPoint& pointTarget);
+
+        int getTotalPointSize() {return m_pointSize;}
+        int getMinimumClusterSize() {return m_minPoints;}
+        int getEpsilonSize() {return m_epsilon;}
+        int getNCluster() {return n_totalCluster; };
+        int getNNoise();
+
+    public:
+        vector<DepthPoint> m_points;
+
+    private:
+        unsigned int m_pointSize;
+        unsigned int m_minPoints;
+        float m_epsilon;
+        unsigned int n_totalCluster;
+    };
+
+
+
+
 
 }
 #endif //ZED_OPEN3D_MISC_H
