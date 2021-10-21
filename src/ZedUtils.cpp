@@ -8,8 +8,9 @@
 using namespace std;
 using namespace zed_utils;
 
-void zed_utils::parseArgs(int argc, char **argv,sl::InitParameters& param)
+bool zed_utils::parseArgs(int argc, char **argv,sl::InitParameters& param)
 {
+    bool doRecord = false;
     if (argc > 1 && string(argv[1]).find(".svo")!=string::npos) {
         // SVO input mode
         param.input.setFromSVOFile(argv[1]);
@@ -44,21 +45,24 @@ void zed_utils::parseArgs(int argc, char **argv,sl::InitParameters& param)
     } else {
         // Default initialization
 
+        doRecord = true;
     }
-
+    return doRecord;
 }
 
 bool zed_utils::initCamera(sl::Camera &zed, sl::InitParameters initParameters) {
+
 
     // Parameter setting
     initParameters.coordinate_units = sl::UNIT::METER;
 //    initParameters.coordinate_system = sl::COORDINATE_SYSTEM::RIGHT_HANDED_Z_UP_X_FWD;
     initParameters.depth_mode = sl::DEPTH_MODE::ULTRA;
     initParameters.depth_maximum_distance = 5.0;
+    initParameters.depth_minimum_distance = 0.1;
 
     sl::ObjectDetectionParameters detectionParameters;
     detectionParameters.detection_model = sl::DETECTION_MODEL::HUMAN_BODY_MEDIUM;
-    detectionParameters.enable_tracking = false;
+    detectionParameters.enable_tracking = true;
     detectionParameters.enable_body_fitting = true;
 
 
@@ -183,4 +187,23 @@ Eigen::Matrix4f Gaze::getTransformation() const {
 
 bool Gaze::isValid() {
     return not (isinf(transformation.norm()) or isnan(transformation.norm())) ;
+}
+
+
+
+void zed_utils::print(string msg_prefix, ERROR_CODE err_code, string msg_suffix) {
+
+    cout <<"[Sample]";
+    if (err_code != ERROR_CODE::SUCCESS)
+        cout << "[Error] ";
+    else
+        cout<<" ";
+    cout << msg_prefix << " ";
+    if (err_code != ERROR_CODE::SUCCESS) {
+        cout << " | " << toString(err_code) << " : ";
+        cout << toVerbose(err_code);
+    }
+    if (!msg_suffix.empty())
+        cout << " " << msg_suffix;
+    cout << endl;
 }

@@ -36,6 +36,16 @@ string gazeName = "gaze coordinate";
 Detector* yoloDetectorPtr;
 vector<string> objectNames;
 
+void signalHandler( int signum ) {
+    cout << "Interrupt signal (" << signum << ") received.\n";
+
+    // cleanup and close up stuff here
+    // terminate program
+    zed.disableRecording();
+    zed.close();
+    exit(signum);
+}
+
 void draw_boxes(cv::Mat mat_img, std::vector<bbox_t> result_vec, std::vector<std::string> obj_names,
                 int current_det_fps = -1, int current_cap_fps = -1) {
     int const colors[6][3] = { { 1,0,1 },{ 0,0,1 },{ 0,1,1 },{ 0,1,0 },{ 1,1,0 },{ 1,0,0 } };
@@ -256,7 +266,7 @@ void updateThread(){
                     cv::Mat subMat = depthCv_cpu(rowRange,colRange);
                     cv::Mat subMask;
                     cv::MatND histogram;
-                    float channel_range[2] = { 0.3 , 5.0 };
+                    float channel_range[2] = { 0.01 , 5.0 };
                     const float* channel_ranges[1] = { channel_range };
                     int histSize[1] = { 50 };
                     int channel[1] = { 0 };  // Blue
@@ -419,11 +429,25 @@ int main(int argc, char** argv) {
 
     // Initialize ZED camera
     sl::InitParameters initParameters;
+    sl::RecordingParameters recordingParameters;
     initParameters.sdk_cuda_ctx = (CUcontext)yoloDetectorPtr->get_cuda_context();
     initParameters.sdk_gpu_id = yoloDetectorPtr->cur_gpu_id;
     initParameters.coordinate_units = sl::UNIT::METER;
-    zed_utils::parseArgs(argc, argv, initParameters);
+    bool doRecord = zed_utils::parseArgs(argc, argv, initParameters);
     zed_utils::initCamera(zed, initParameters);
+    if (doRecord) {
+        signal(SIGINT, signalHandler);
+        recordingParameters.compression_mode = SVO_COMPRESSION_MODE::H264;
+        auto wallTime = chrono::system_clock::now();
+        string timeString = to_string(wallTime.time_since_epoch().count());
+        recordingParameters.video_filename = ("/home/jbs/Documents/ZED/attention_record_" + timeString +".svo").c_str();
+        auto returned_state = zed.enableRecording(recordingParameters);
+        if (returned_state != ERROR_CODE::SUCCESS) {
+            zed_utils::print("Recording ZED : ", returned_state,"");
+            zed.close();
+            return EXIT_FAILURE;
+        }
+    }
     cv::namedWindow("object detection",cv::WINDOW_KEEPRATIO);
     cv::resizeWindow("object detection", 600,400);
 
@@ -453,5 +477,9 @@ int main(int argc, char** argv) {
     o3d_vis::gui::Application::GetInstance().Run();
     cameraThread.join();
 
+    if (doRecord)
+        zed.disableRecording();
+    zed.close();
+    cout << "exiting..." << endl;
     return 0;
 }

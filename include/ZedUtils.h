@@ -28,7 +28,7 @@ namespace zed_utils {
 
     };
 
-    void parseArgs(int argc, char **argv, sl::InitParameters &param);
+    bool parseArgs(int argc, char **argv, sl::InitParameters &param);
 
     bool initCamera(sl::Camera &zed, sl::InitParameters initParameters);
 
@@ -40,7 +40,7 @@ namespace zed_utils {
 
     open3d::geometry::RGBDImage createFromCvImage(const cv::Mat &image, const cv::Mat &depth);
 
-
+    void print(string msg_prefix, ERROR_CODE err_code, string msg_suffix);
 
 
     
