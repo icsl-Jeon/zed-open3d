@@ -20,7 +20,8 @@ std::shared_ptr<o3d_tensor::PointCloud> pointsO3dPtr;
 std::shared_ptr<o3d_tensor::PointCloud> objPointsO3dPtr;
 std::shared_ptr<o3d_legacy::PointCloud> objPointsO3dPtr_cpu[nMaxOoiClusters];
 std::shared_ptr<o3d_legacy::AxisAlignedBoundingBox> objBbO3dPtr[nMaxOoiClusters];
-cv::Mat objPixelMask[nMaxOoiClusters];
+cv::Mat objPixelMask[nMaxOoiClusters]; // size = original stereo image (todo: is it necessary?)
+std::shared_ptr<o3d_legacy::TriangleMesh> objCentersO3dPtr[nMaxOoiClusters];
 
 std::shared_ptr<o3d_legacy::LineSet> skeletonO3dPtr ; // object skeleton
 std::shared_ptr<o3d_vis::visualizer::O3DVisualizer> vis;
@@ -248,6 +249,10 @@ void updateThread(){
                     yoloDetectorPtr->detect_resized(*imageDarknet,imageCv.cols,imageCv.rows,threshold,true);
             resultBoundingBox = yoloDetectorPtr->tracking_id(resultBoundingBox);
 
+            // flusing previous object points
+            for (auto & pcl : objPointsO3dPtr_cpu)
+                pcl->Clear();
+
             // Extract points of detected objects
             misc::Timer timerObjPointsExtraction;
             float scale = 0.8; // scaling dimensions by this
@@ -281,17 +286,39 @@ void updateThread(){
                                 cv::Scalar (-0.3 + peakDepth),cv::Scalar (0.3+peakDepth),
                                 subMask);
 
-                    // visualizing masked pixel
+
+                    // visualizing  masked pixel
                     float alpha = 0.5;
                     auto maskDataPtr = (uchar * ) subMask.data;
                     for (int rr = 0 ; rr < rowRange.size() ; rr++)
                         for (int cc = 0; cc < colRange.size(); cc++)
                             if (maskDataPtr[rr *colRange.size() + cc]){
                                 auto& bgr = depthDetectCv_cpu.at<cv::Vec3b>(rr + rowRange.start,
-                                                                cc + colRange.start);
+                                                                 cc + colRange.start);
                                 int colorIdx = 2; // red
                                 bgr(colorIdx) = (1-alpha)*bgr(colorIdx) + alpha * 255;
                             }
+
+                    // computing points of objects
+                    for (int rr = 0 ; rr < rowRange.size() ; rr++)
+                        for (int cc = 0; cc < colRange.size(); cc++)
+                            if (maskDataPtr[rr *colRange.size() + cc]){
+                                float depthVal = depthCv_cpu.at<float>( rr + rowRange.start , cc + colRange.start);
+                                Eigen::Vector3d point;
+                                point.z() = depthVal;
+                                point.x() = (cc + colRange.start - cx) * depthVal / fx;
+                                point.y() = (rr + rowRange.start - cy) * depthVal / fy;
+                                objPointsO3dPtr_cpu[nClusterOoi]->points_.push_back(point);
+                            }
+                    objPointsO3dPtr_cpu[nClusterOoi]->PaintUniformColor({0.8,0.2,0.2});
+                    Eigen::Vector3d objCenter = objPointsO3dPtr_cpu[nClusterOoi]->GetCenter();
+                    objCentersO3dPtr[nClusterOoi]->Translate(objCenter,false);
+
+                    if (not objPointsO3dPtr_cpu[nClusterOoi]->HasPoints()){
+                        objPointsO3dPtr_cpu[nClusterOoi]->points_.emplace_back(0.1,0.1,0.1);
+                        objPointsO3dPtr_cpu[nClusterOoi]->points_.emplace_back(0.11,0.11,0.11);
+                    }
+
 
                     // plot the histogram in imshow (todo make func)
                     if (drawHistogram) {
@@ -332,6 +359,11 @@ void updateThread(){
                     nClusterOoi ++;
                 } // if bottle
             }
+            // fill dummy points to suppress warning message (not in the scene graph..)
+            for (int nn = nClusterOoi ; nn < nMaxOoiClusters ; nn++){
+                objPointsO3dPtr_cpu[nn]->points_.emplace_back(0.1,0.1,0.1);
+                objPointsO3dPtr_cpu[nn]->points_.emplace_back(0.11,0.11,0.11);
+            }
 
 
             draw_boxes(depthDetectCv_cpu, resultBoundingBox, objectNames);
@@ -344,8 +376,6 @@ void updateThread(){
                    nClusterOoi,
                    pointsO3dPtr->GetPointPositions().GetLength(),
                    elapse);
-
-
 
             // initialize viewport
             if (not isInit) {
@@ -361,10 +391,13 @@ void updateThread(){
 
                 o3d_vis::gui::Application::GetInstance().PostToMainThread(
                         vis.get(), [pointsCenterEigen,eye, pointsO3dPtr_cpu, mat](){
-                        vis->AddGeometry(cloudName,pointsO3dPtr_cpu, &mat); // this is important! as visible range is determined
+                        // this is important! as visible range is determined
+                        vis->AddGeometry(cloudName,pointsO3dPtr_cpu, &mat);
                         vis->ResetCameraToDefault();
                         vis->SetupCamera(60,pointsCenterEigen,eye,{0.0, -1.0, 0.0});
                 });
+
+                vis->SetLineWidth(2);
             }
 
             // Draw in the view port
@@ -392,12 +425,23 @@ void updateThread(){
                                 gazeCoordinate->Transform(gaze.getTransformation().cast<double>());
                                 vis->AddGeometry(gazeName, gazeCoordinate, &mat);
                             }
+                            for (int nn = 0; nn < nMaxOoiClusters ; nn++) {
+
+                                // object center point
+                                vis->AddGeometry(
+                                        "object_points_" + to_string(nn),
+                                        objPointsO3dPtr_cpu[nn],&mat);
+
+                                // object pointcloud
+                                vis->AddGeometry(
+                                        "object_center_" + to_string(nn),
+                                        objCentersO3dPtr[nn],&mat);
+                            }
+
                         }
 
                         // force redraw
                         vis->SetPointSize(1); // this calls ForceRedraw(), readily update the viewport.
-                        vis->SetLineWidth(2);
-//                        vis->SetLineWidth(3);
                         vis->SetBackground({0,0,0,1});
 
                     } // lambda function body
@@ -457,6 +501,13 @@ int main(int argc, char** argv) {
     for (int nn = 0 ; nn < nMaxOoiClusters ; nn++) {
         objPointsO3dPtr_cpu[nn] = std::make_shared<o3d_legacy::PointCloud>();
         objBbO3dPtr[nn] = std::make_shared<o3d_legacy::AxisAlignedBoundingBox>();
+
+        // marker type intialize
+        objCentersO3dPtr[nn] = std::make_shared<o3d_legacy::TriangleMesh>();
+        *objCentersO3dPtr[nn] =
+            *(o3d_legacy::TriangleMesh::CreateSphere(0.02,20));
+        objCentersO3dPtr[nn]->PaintUniformColor({0,1,0});
+
     }
     skeletonO3dPtr = std::make_shared<o3d_legacy::LineSet>();
     gazeCoordinate = std::make_shared<o3d_legacy::TriangleMesh>();

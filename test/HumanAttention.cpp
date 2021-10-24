@@ -230,6 +230,8 @@ int main(int argc, char** argv) {
         float r= 250.0/255.0, g = 100.0/255.0, b = 100.0/255.0;
         attentionPoint->PaintUniformColor({r,g,b});
     }
+
+
     const char *const resource_path{"/usr/local/bin/Open3D/resources"};
     o3d_vis::gui::Application::GetInstance().Initialize(resource_path);
     vis = std::make_shared<o3d_vis::visualizer::O3DVisualizer>("Open3d - PointCloud",800,600);
