@@ -9,14 +9,17 @@ namespace o3d_legacy = open3d::geometry;
 namespace o3d_core = open3d::core;
 namespace o3d_vis = open3d::visualization;
 
+
 sl::Camera zed;
 zed_utils::Gaze gaze;
+
 
 std::shared_ptr<o3d_tensor::PointCloud> pointsO3dPtr;
 std::shared_ptr<o3d_legacy::LineSet> skeletonO3dPtr ; // object skeleton
 std::shared_ptr<o3d_vis::visualizer::O3DVisualizer> vis;
 std::shared_ptr<o3d_legacy::TriangleMesh> attentionPointSet[4]; // left eye, right eye, left wrist, right wrist
 std::shared_ptr<o3d_legacy::TriangleMesh> gazeCoordinate;
+
 
 std::mutex locker;
 string cloudName = "zed points";

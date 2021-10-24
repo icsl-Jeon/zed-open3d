@@ -5,6 +5,8 @@
 #include <Misc.h>
 namespace  misc {
 
+
+
     int DBSCAN::run() {
         int clusterID = 1;
         vector<DepthPoint>::iterator iter;

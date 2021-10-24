@@ -57,7 +57,7 @@ bool zed_utils::initCamera(sl::Camera &zed, sl::InitParameters initParameters) {
     initParameters.coordinate_units = sl::UNIT::METER;
 //    initParameters.coordinate_system = sl::COORDINATE_SYSTEM::RIGHT_HANDED_Z_UP_X_FWD;
     initParameters.depth_mode = sl::DEPTH_MODE::ULTRA;
-    initParameters.depth_maximum_distance = 5.0;
+    initParameters.depth_maximum_distance = 7.0;
     initParameters.depth_minimum_distance = 0.1;
 
     sl::ObjectDetectionParameters detectionParameters;
@@ -185,8 +185,18 @@ Eigen::Matrix4f Gaze::getTransformation() const {
 }
 
 
-bool Gaze::isValid() {
+bool Gaze::isValid()  const {
     return not (isinf(transformation.norm()) or isnan(transformation.norm())) ;
+}
+
+float Gaze::measureAngleToPoint(const Eigen::Vector3f &point) const {
+    if (not this->isValid()){
+        printf("[Gaze] gaze is not valid. But angle-measure requested. Returning inf\n");
+        return INFINITY;
+    }
+
+    Eigen::Vector3f viewVector = (point - root); viewVector.normalize();
+    return atan2(viewVector.cross(direction).norm(), viewVector.dot(direction));
 }
 
 

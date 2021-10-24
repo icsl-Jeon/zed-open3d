@@ -13,6 +13,9 @@
 #include <chrono>
 #include <vector>
 #include <cmath>
+#include <string>
+#include <sstream>
+
 
 using namespace std::chrono;
 using namespace std;
@@ -33,6 +36,13 @@ namespace misc {
         }
     };
 
+    template <typename T>
+    std::string to_string_with_precision(const T a_value, const int n = 6){
+        std::ostringstream out;
+        out.precision(n);
+        out << std::fixed << a_value;
+        return out.str();
+    }
 
     int const clusterColors[6][3] = { { 1,0,1 },{ 0,0,1 },{ 0,1,1 },{ 0,1,0 },{ 1,1,0 },{ 1,0,0 } };
 

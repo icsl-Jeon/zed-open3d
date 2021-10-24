@@ -24,7 +24,8 @@ namespace zed_utils {
         Gaze() = default;
         Gaze(const sl::ObjectData& humanObject);
         Eigen::Matrix4f getTransformation() const;
-        bool isValid();
+        bool isValid() const ;
+        float measureAngleToPoint(const Eigen::Vector3f & point) const;
 
     };
 

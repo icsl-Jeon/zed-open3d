@@ -9,12 +9,26 @@ namespace o3d_legacy = open3d::geometry;
 namespace o3d_core = open3d::core;
 namespace o3d_vis = open3d::visualization;
 
+struct AttentionStatus{
+    float angleFromGaze = INFINITY;
+    float distToLeftHand = INFINITY;
+    float distToRightHand = INFINITY;
+    float weightHands = 0.1;
+    bbox_t boundingBox; // bounding box in image
+    float getAttentionCost () {
+        return weightHands*(distToLeftHand + distToRightHand) + angleFromGaze;}
+
+};
+
 sl::Camera zed;
 zed_utils::Gaze gaze;
+Eigen::Vector3f leftHand; // left hand location
+Eigen::Vector3f rightHand; // right hand location
 
 const int nMaxOoiClusters = 4;
 int nOoiClustersPrev = 0;
 bool drawHistogram = false;
+float gazeFov = M_PI /3.0 *2.0; // cone (height/rad) = tan(gazeFov/2)
 
 std::shared_ptr<o3d_tensor::PointCloud> pointsO3dPtr;
 std::shared_ptr<o3d_tensor::PointCloud> objPointsO3dPtr;
@@ -47,6 +61,7 @@ void signalHandler( int signum ) {
     exit(signum);
 }
 
+// default yolo bounding box
 void draw_boxes(cv::Mat mat_img, std::vector<bbox_t> result_vec, std::vector<std::string> obj_names,
                 int current_det_fps = -1, int current_cap_fps = -1) {
     int const colors[6][3] = { { 1,0,1 },{ 0,0,1 },{ 0,1,1 },{ 0,1,0 },{ 1,1,0 },{ 1,0,0 } };
@@ -71,7 +86,7 @@ void draw_boxes(cv::Mat mat_img, std::vector<bbox_t> result_vec, std::vector<std
             std::string coords_3d;
             if (!std::isnan(i.z_3d)) {
                 std::stringstream ss;
-                ss << std::fixed << std::setprecision(2) << "x:" << i.x_3d << "m y:" << i.y_3d << "m z:" << i.z_3d << "m ";
+                ss << std::fixed << std::setprecision(1) << "x:" << i.x_3d << "m y:" << i.y_3d << "m z:" << i.z_3d << "m ";
                 coords_3d = ss.str();
                 cv::Size const text_size_3d = getTextSize(ss.str(), cv::FONT_HERSHEY_COMPLEX_SMALL, 0.8, 1, 0);
                 int const max_width_3d = (text_size_3d.width > i.w + 2) ? text_size_3d.width : (i.w + 2);
@@ -89,6 +104,55 @@ void draw_boxes(cv::Mat mat_img, std::vector<bbox_t> result_vec, std::vector<std
         std::string fps_str = "FPS detection: " + std::to_string(current_det_fps) + "   FPS capture: " + std::to_string(current_cap_fps);
         putText(mat_img, fps_str, cv::Point2f(10, 20), cv::FONT_HERSHEY_COMPLEX_SMALL, 1.2, cv::Scalar(50, 255, 0), 2);
     }
+} // draw box
+
+
+// Attention score display
+void draw_attention_box(cv::Mat mat_img,
+                        std::vector<AttentionStatus> attentionStatusSet) {
+    int nObject = attentionStatusSet.size();
+    string obj_name = "OOI_" ; // following original code convention
+    std::sort(attentionStatusSet.begin(),
+                                      attentionStatusSet.end(),
+                                      [](AttentionStatus& attentionLhs, AttentionStatus& attentionRhs){
+                                        return attentionLhs.getAttentionCost() < attentionRhs.getAttentionCost();}
+                                      );
+
+    int const colors[4][3] = {{51,51,255}, {0,128,255}, {0,255,255},{51,255,51}}; // BGR
+    for (int nn = 0 ; nn < nObject; nn++) {
+        // determine color: INF = black. the others = red, orange, yellow, green
+        bbox_t box = attentionStatusSet[nn].boundingBox;
+        cv::Scalar color;
+        bool isAttentionCalculated = attentionStatusSet[nn].getAttentionCost() != INFINITY;
+        if (not isAttentionCalculated) {
+            color = cv::Scalar(10, 10, 10);
+        } else {
+            int colorIdx = min(nn, 3);
+            color = cv::Scalar(colors[colorIdx][0],
+                               colors[colorIdx][1],
+                               colors[colorIdx][2]);
+        }
+        cv::rectangle(mat_img, cv::Rect(box.x, box.y, box.w, box.h), color, 2); // rectangle frame
+
+        if (isAttentionCalculated) {
+            float score = attentionStatusSet[nn].getAttentionCost();
+
+            std::stringstream ss;
+            ss << std::fixed << std::setprecision(1) << "OOI_" << score ;
+            string scoreString = ss.str();
+
+            obj_name =  scoreString;
+            cv::Size const text_size = getTextSize(obj_name, cv::FONT_HERSHEY_COMPLEX_SMALL, 1.2, 2, 0);
+            int max_width = (text_size.width > box.w + 2) ? text_size.width : (box.w + 2);
+            max_width = std::max(max_width, (int) box.w + 2);
+            cv::rectangle(mat_img, cv::Point2f(std::max((int) box.x - 1, 0), std::max((int) box.y - 35, 0)),
+                          cv::Point2f(std::min((int) box.x + max_width, mat_img.cols - 1),
+                                      std::min((int) box.y, mat_img.rows - 1)),
+                          color, cv::FILLED, 8, 0);
+            putText(mat_img, obj_name, cv::Point2f(box.x, box.y - 16), cv::FONT_HERSHEY_COMPLEX_SMALL, 1.2,
+                    cv::Scalar(0, 0, 0), 2);
+        }
+    } // iter: detection box
 } // draw box
 
 
@@ -181,7 +245,7 @@ void updateThread(){
 
     auto matAttention = o3d_vis::rendering::Material();
     matAttention.base_color = {0.9, 0.5,0.5, 0.5};
-    matAttention.has_alpha = true; // seems not working
+    matAttention.has_alpha = true; // seems not working ...
 
     auto pointsO3dPtr_cpu = std::make_shared<o3d_tensor::PointCloud>() ;
 
@@ -248,8 +312,9 @@ void updateThread(){
             std::vector<bbox_t> resultBoundingBox =
                     yoloDetectorPtr->detect_resized(*imageDarknet,imageCv.cols,imageCv.rows,threshold,true);
             resultBoundingBox = yoloDetectorPtr->tracking_id(resultBoundingBox);
+            std::vector<AttentionStatus> attentionStatusSet;
 
-            // flusing previous object points
+            // flushing previous object points
             for (auto & pcl : objPointsO3dPtr_cpu)
                 pcl->Clear();
 
@@ -257,9 +322,10 @@ void updateThread(){
             misc::Timer timerObjPointsExtraction;
             float scale = 0.8; // scaling dimensions by this
             int nClusterOoi = 0;
-            int nTotalPntsOoi = 0;
+
             for (const auto& bb : resultBoundingBox){
                 if (bb.obj_id == 39 and (nClusterOoi < nMaxOoiClusters)) { // 39 = bottle
+                    attentionStatusSet.push_back(AttentionStatus());
                     objPixelMask[nClusterOoi] =
                             cv::Mat(imageCv.rows,imageCv.cols,CV_8UC1,cv::Scalar(0));// initialize object mask
 
@@ -286,7 +352,6 @@ void updateThread(){
                                 cv::Scalar (-0.3 + peakDepth),cv::Scalar (0.3+peakDepth),
                                 subMask);
 
-
                     // visualizing  masked pixel
                     float alpha = 0.5;
                     auto maskDataPtr = (uchar * ) subMask.data;
@@ -300,6 +365,7 @@ void updateThread(){
                             }
 
                     // computing points of objects
+                    bool isPointExistInBox = true;
                     for (int rr = 0 ; rr < rowRange.size() ; rr++)
                         for (int cc = 0; cc < colRange.size(); cc++)
                             if (maskDataPtr[rr *colRange.size() + cc]){
@@ -313,60 +379,37 @@ void updateThread(){
                     objPointsO3dPtr_cpu[nClusterOoi]->PaintUniformColor({0.8,0.2,0.2});
                     Eigen::Vector3d objCenter = objPointsO3dPtr_cpu[nClusterOoi]->GetCenter();
                     objCentersO3dPtr[nClusterOoi]->Translate(objCenter,false);
-
-                    if (not objPointsO3dPtr_cpu[nClusterOoi]->HasPoints()){
+                    isPointExistInBox = objPointsO3dPtr_cpu[nClusterOoi]->HasPoints();
+                    if (not isPointExistInBox){
                         objPointsO3dPtr_cpu[nClusterOoi]->points_.emplace_back(0.1,0.1,0.1);
                         objPointsO3dPtr_cpu[nClusterOoi]->points_.emplace_back(0.11,0.11,0.11);
                     }
 
 
-                    // plot the histogram in imshow (todo make func)
-                    if (drawHistogram) {
-                        int hist_w = 600;
-                        int hist_h = 400;
-                        int bin_w = cvRound((double) hist_w / histSize[0]);
-
-                        cv::Mat hist_img(hist_h, hist_w, CV_8UC1, cv::Scalar::all(0));
-                        cv::normalize(histogram, histogram, 0, hist_img.rows, cv::NORM_MINMAX);
-
-                        for (int i = 1; i < histSize[0]; i++) {
-                            line(hist_img, cv::Point(bin_w * (i - 1), hist_h - cvRound(histogram.at<float>(i - 1))),
-                                 cv::Point(bin_w * (i),
-                                           hist_h - cvRound(histogram.at<float>(i))),
-                                 cv::Scalar(255, 0, 0), 1, 8, 0);
-                        }
-                        cv::imshow("histogram_" + to_string(nClusterOoi), hist_img);
-                        cv::waitKey(1);
+                    // Compute attention
+                    AttentionStatus attention;
+                    if (isPointExistInBox){
+                        Eigen::Vector3f objCenterf = objCenter.cast<float>();
+                        attention.angleFromGaze = gaze.measureAngleToPoint(objCenterf);
+                        attention.distToLeftHand  = (leftHand - objCenter.cast<float>()).norm();
+                        attention.distToRightHand = (rightHand - objCenter.cast<float>()).norm();
+                        attention.boundingBox = bb;
+                        attentionStatusSet[nClusterOoi] = attention;
+                    }else{
+                        printf("An object is detected in image, but no points were found in bb.\n");
                     }
-                    /**
-                    auto objectsDepth = nanTensor.Clone();
-                    auto bb_1_window = o3d_core::TensorKey::Slice(bb.y+ bb.h * (1 - scale) / 2.0,
-                                                                  bb.y + bb.h - bb.h * (1 - scale) / 2.0,
-                                                                  1);
-                    auto bb_2_window = o3d_core::TensorKey::Slice(bb.x + bb.w * (1 - scale) / 2.0,
-                                                                  bb.x + bb.w - bb.w * (1 - scale) / 2.0,
-                                                                  1);
-                    objectsDepth.SetItem({bb_1_window, bb_2_window},
-                                         depthTensor.GetItem({bb_1_window, bb_2_window}));
-
-                    *objPointsO3dPtr = o3d_tensor::PointCloud::CreateFromDepthImage(objectsDepth,
-                                                                                    intrinsicO3dTensor,extrinsicO3dTensor,
-                                                                                    1,3,1);
-
-                    *objPointsO3dPtr_cpu[nClusterOoi] = objPointsO3dPtr->ToLegacy(); // raw points
-                    **/
 
                     nClusterOoi ++;
                 } // if bottle
-            }
+            } // detected bounding box
+
             // fill dummy points to suppress warning message (not in the scene graph..)
             for (int nn = nClusterOoi ; nn < nMaxOoiClusters ; nn++){
                 objPointsO3dPtr_cpu[nn]->points_.emplace_back(0.1,0.1,0.1);
                 objPointsO3dPtr_cpu[nn]->points_.emplace_back(0.11,0.11,0.11);
             }
 
-
-            draw_boxes(depthDetectCv_cpu, resultBoundingBox, objectNames);
+            draw_attention_box(depthDetectCv_cpu,attentionStatusSet );
             printf("object detection in %.3f ms. \n" ,timerDetect.stop());
             cv::imshow("object detection",depthDetectCv_cpu);
             cv::waitKey(1);
@@ -376,6 +419,8 @@ void updateThread(){
                    nClusterOoi,
                    pointsO3dPtr->GetPointPositions().GetLength(),
                    elapse);
+
+
 
             // initialize viewport
             if (not isInit) {
@@ -402,7 +447,7 @@ void updateThread(){
 
             // Draw in the view port
             o3d_vis::gui::Application::GetInstance().PostToMainThread(
-                    vis.get(), [mat, matLine, matAttention, pointsO3dPtr_cpu, isObject](){
+                    vis.get(), [mat, matLine,  matAttention, pointsO3dPtr_cpu, isObject](){
                         std::lock_guard<std::mutex> lock (locker);
                         // flushing
                         for (auto geoNames: vis->GetScene()->GetGeometries())
@@ -419,14 +464,16 @@ void updateThread(){
                             // attention points (hands + eyes )
                             for (int i = 0; i<4 ;i++)
                                 vis->AddGeometry(attentionName[i],attentionPointSet[i],&matAttention);
-                            // gaze coordinate
+                            // gaze coordinate & cone
                             *gazeCoordinate = *o3d_legacy::TriangleMesh::CreateCoordinateFrame(0.1);
                             if (gaze.isValid()) {
                                 gazeCoordinate->Transform(gaze.getTransformation().cast<double>());
                                 vis->AddGeometry(gazeName, gazeCoordinate, &mat);
                             }
-                            for (int nn = 0; nn < nMaxOoiClusters ; nn++) {
 
+
+                            // detected objects
+                            for (int nn = 0; nn < nMaxOoiClusters ; nn++) {
                                 // object center point
                                 vis->AddGeometry(
                                         "object_points_" + to_string(nn),
@@ -511,6 +558,7 @@ int main(int argc, char** argv) {
     }
     skeletonO3dPtr = std::make_shared<o3d_legacy::LineSet>();
     gazeCoordinate = std::make_shared<o3d_legacy::TriangleMesh>();
+
 
     for (auto & attentionPoint : attentionPointSet) {
         attentionPoint =
