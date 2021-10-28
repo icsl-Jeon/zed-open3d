@@ -75,3 +75,8 @@ target_link_libraries(OoiExtractor PRIVATE  ${ZED_LIBS}   ${OpenCV_LIBRARIES} Op
 
 add_executable(TsdfIntegration test/TsdfIntegration.cpp src/ZedUtils.cpp src/Misc.cpp src/Open3dUtils.cpp )
 target_link_libraries(TsdfIntegration PRIVATE  ${ZED_LIBS}   ${OpenCV_LIBRARIES} Open3D::Open3D ${CUDA_LIBRARIES} ${DARKNET_LIB} )
+
+add_executable(OoiExtractorMesh test/OoiExtractorMesh.cpp src/ZedUtils.cpp src/Misc.cpp src/Open3dUtils.cpp )
+target_link_libraries(OoiExtractorMesh PRIVATE  ${ZED_LIBS}   ${OpenCV_LIBRARIES} Open3D::Open3D ${CUDA_LIBRARIES} ${DARKNET_LIB} )
+
+

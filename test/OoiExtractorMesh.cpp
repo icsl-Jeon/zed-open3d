@@ -30,7 +30,9 @@ int nOoiClustersPrev = 0;
 bool drawHistogram = false;
 float gazeFov = M_PI /3.0 *2.0; // cone (height/rad) = tan(gazeFov/2)
 
-std::shared_ptr<o3d_tensor::PointCloud> pointsO3dPtr;
+o3d_tensor::TSDFVoxelGrid* volumePtr;
+std::shared_ptr<o3d_legacy::TriangleMesh> meshPtr;
+
 std::shared_ptr<o3d_tensor::PointCloud> objPointsO3dPtr;
 std::shared_ptr<o3d_legacy::PointCloud> objPointsO3dPtr_cpu[nMaxOoiClusters];
 std::shared_ptr<o3d_legacy::AxisAlignedBoundingBox> objBbO3dPtr[nMaxOoiClusters];
@@ -265,15 +267,9 @@ void updateThread(){
             auto isObjectSuccess = zed.retrieveObjects(humanObjects,objectParameters);
 
             double projectionElapse;
-            // construct pointcloud. We lock with the same mutex in the posted thread on visualizer
             {
                 std::lock_guard<std::mutex> lock(locker);
 
-                o3d_tensor::RGBDImage rgbdImage (imageO3d,depthO3d);
-                misc::Timer timerPclFromRGBD;
-                *pointsO3dPtr = (o3d_tensor::PointCloud::CreateFromRGBDImage(rgbdImage,
-                                                                         intrinsicO3dTensor, extrinsicO3dTensor,
-                                                                         1, 3, 2));
 
                 if (not humanObjects.object_list.empty()) {
                     // skeleton extraction
@@ -283,22 +279,25 @@ void updateThread(){
                     gaze = zed_utils::Gaze(humanObjects.object_list[0]);
 
                     // pixel mask extraction (todo gpu?)
-                    humanPixelMask = zed_utils::slMat2cvMat(humanObjects.object_list[0].mask).clone();
+                    auto human_bb = humanObjects.object_list[0].bounding_box_2d;
+                    cv::Mat humanPixelMaskSub = zed_utils::slMat2cvMat(humanObjects.object_list[0].mask).clone();
                     int kernelSize = 10;
-                    cv::erode(humanPixelMask, humanPixelMask, getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(kernelSize, kernelSize)));
-                    cv::dilate(humanPixelMask, humanPixelMask, getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(kernelSize, kernelSize)));
+                    cv::erode(humanPixelMaskSub, humanPixelMaskSub, getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(kernelSize, kernelSize)));
+                    cv::dilate(humanPixelMaskSub, humanPixelMaskSub, getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(kernelSize, kernelSize)));
 
-                    cv::imshow("human mask", humanPixelMask);
-                    cv::waitKey(1);
+                    cv::Range rowRangeHuman(human_bb[0].y, human_bb[0].y + humanPixelMaskSub.rows );
+                    cv::Range colRangeHuman(human_bb[0].x, human_bb[0].x + humanPixelMaskSub.cols);
+                    humanPixelMask = cv::Mat::zeros(imageCv3Ch.size(),CV_8UC1);
+                    cv::Mat humanPixelMaskSubPartPtr = humanPixelMask(rowRangeHuman,colRangeHuman); // shallow copy
+                    humanPixelMaskSub.copyTo(humanPixelMaskSubPartPtr);
+
+                    cv::bitwise_not(humanPixelMask,humanPixelMask);
+
                     isObject = true;
                 }
             }
             printf("Image + depth + points + objects retrieved in %.3f ms. (pcl proj = %.3f ms) \n" ,timer.stop(),projectionElapse);
 
-            // not mandatory..
-            misc::Timer timerVis;
-            *pointsO3dPtr_cpu = pointsO3dPtr->To(o3d_core::Device("CPU:0")); // ToLegacy() takes much time but To() is okay.
-            printf("cpu transfer took %.3f ms. (only for visualization)\n" ,timerVis.stop());
 
             // detect in Darknet
             depthCv.download(depthCv_cpu); // depthCv = war depth
@@ -424,8 +423,17 @@ void updateThread(){
 //            cv::erode(objPixelMask, objPixelMask,getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(kernelSize, kernelSize)));
             cv::dilate(objPixelMask, objPixelMask,getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(kernelSize, kernelSize)));
 
-            cv::imshow("objects mask",objPixelMask);
+            // Now we gathered all mask (objects + human). Subtract them
+            cv::bitwise_not(objPixelMask,objPixelMask);
+            cv::Mat survivedMask;
+            cv::bitwise_and(objPixelMask,humanPixelMask,survivedMask);
+
+            o3d_tensor::RGBDImage rgbdImage (imageO3d,depthO3d);
+
+            cv::imshow("mask: objects + human",survivedMask);
             cv::waitKey(1);
+
+
 
             // fill dummy points to suppress warning message (not in the scene graph..)
             for (int nn = nClusterOoi ; nn < nMaxOoiClusters ; nn++){
@@ -439,12 +447,6 @@ void updateThread(){
             cv::waitKey(1);
 
             double elapse = timerObjPointsExtraction.stop();
-            printf("%zu cluster of ooi  (total points %zu) processing : %.3f ms \n ",
-                   nClusterOoi,
-                   pointsO3dPtr->GetPointPositions().GetLength(),
-                   elapse);
-
-
 
 
             // initialize viewport
@@ -454,17 +456,15 @@ void updateThread(){
                         (imageCv3Ch_cpu.data), {row, col, 3}, rgbType, device_gpu);
                 isInit = true;
 
-                auto pointsCenter = pointsO3dPtr->GetCenter();
-                auto centerCPU = pointsCenter.ToFlatVector<float>();
-                Eigen::Vector3f pointsCenterEigen(centerCPU[0],centerCPU[1],centerCPU[2]);
-                Eigen::Vector3f eye = pointsCenterEigen + Eigen::Vector3f(0,0,-3);
+                auto pointsCenter = skeletonO3dPtr->GetCenter().cast<float>();
+                Eigen::Vector3f eye = pointsCenter + Eigen::Vector3f(0,0,-3);
 
                 o3d_vis::gui::Application::GetInstance().PostToMainThread(
-                        vis.get(), [pointsCenterEigen,eye, pointsO3dPtr_cpu, mat](){
+                        vis.get(), [pointsCenter,eye, pointsO3dPtr_cpu, mat](){
                         // this is important! as visible range is determined
                         vis->AddGeometry(cloudName,pointsO3dPtr_cpu, &mat);
                         vis->ResetCameraToDefault();
-                        vis->SetupCamera(60,pointsCenterEigen,eye,{0.0, -1.0, 0.0});
+                        vis->SetupCamera(60,pointsCenter,eye,{0.0, -1.0, 0.0});
                 });
 
                 vis->SetLineWidth(2);
@@ -568,7 +568,7 @@ int main(int argc, char** argv) {
     cv::resizeWindow("object detection", 600,400);
 
     // Initialize open3d
-    pointsO3dPtr = std::make_shared<o3d_tensor::PointCloud>();
+    meshPtr = std::make_shared<o3d_legacy::TriangleMesh>();
     objPointsO3dPtr = std::make_shared<o3d_tensor::PointCloud>();
     for (int nn = 0 ; nn < nMaxOoiClusters ; nn++) {
         objPointsO3dPtr_cpu[nn] = std::make_shared<o3d_legacy::PointCloud>();
