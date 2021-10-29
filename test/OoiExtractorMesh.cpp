@@ -188,6 +188,7 @@ void updateThread(){
     // buffer binding for cv objects
     cv::cuda::GpuMat imageCv = zed_utils::slMat2cvMatGPU(image); // bound buffer (rgba)
     cv::cuda::GpuMat depthCv = zed_utils::slMat2cvMatGPU(depth); // bound buffer
+    cv::cuda::GpuMat depthCvCarved = cv::cuda::createContinuous(row,col,CV_32FC1); // pixels of obj + human = NAN
     cv::cuda::GpuMat imageCv3Ch = cv::cuda::createContinuous(row,col,CV_8UC3);
     cv::Mat imageCv3Ch_cpu; // will not be used. But needed for cuda scope
     cv::Mat depthCv_cpu;
@@ -229,6 +230,12 @@ void updateThread(){
     o3d_tensor::Image depthO3d(depthTensor);
     auto nanTensor = o3d_core::Tensor::Full({row,col,1} ,NAN, depthType,device_gpu);
 
+    auto depthCarvedBlob = std::make_shared<o3d_core::Blob>(
+            device_gpu, depthCvCarved.cudaPtr(), nullptr);
+    auto depthCarvedTensor = o3d_core::Tensor({row,col,1}, {col,1,1},
+                                        depthCarvedBlob->GetDataPtr(),depthType,depthCarvedBlob);
+    o3d_tensor::Image depthCarvedO3d(depthCarvedTensor);
+
     // pointcloud construction
     auto rgbdO3dPtr_cpu = std::make_shared<o3d_legacy::RGBDImage>();
 
@@ -252,6 +259,14 @@ void updateThread(){
     matAttention.has_alpha = true; // seems not working ...
 
     auto pointsO3dPtr_cpu = std::make_shared<o3d_tensor::PointCloud>() ;
+
+    volumePtr = (new o3d_tensor::TSDFVoxelGrid({{"tsdf", open3d::core::Dtype::Float32},
+                                                {"weight", open3d::core::Dtype::UInt16},
+                                                {"color", open3d::core::Dtype::UInt16}},
+                                               8.f / 512.f,  0.04f, 16,
+                                               1000, device_gpu));
+
+
 
     // retrieving thread start
     bool isInit = false;
@@ -427,12 +442,19 @@ void updateThread(){
             cv::bitwise_not(objPixelMask,objPixelMask);
             cv::Mat survivedMask;
             cv::bitwise_and(objPixelMask,humanPixelMask,survivedMask);
+            cv::cuda::GpuMat maskGpu; maskGpu.upload(survivedMask);
+            depthCvCarved.setTo(cv::Scalar(NAN));
+            depthCv.copyTo(depthCvCarved,maskGpu);
+            cv::Mat depthCvCarved_cpu;
+            depthCvCarved.download(depthCvCarved_cpu);
 
-            o3d_tensor::RGBDImage rgbdImage (imageO3d,depthO3d);
+            // integrate mesh
+            o3d_tensor::RGBDImage rgbdImage (imageO3d,depthCarvedO3d);
+            volumePtr->Integrate(rgbdImage.depth_,rgbdImage.color_,intrinsicO3dTensor,extrinsicO3dTensor,1);
+            *meshPtr  = volumePtr->ExtractSurfaceMesh().ToLegacy();
 
-            cv::imshow("mask: objects + human",survivedMask);
-            cv::waitKey(1);
-
+//            cv::imshow("masked depth: objects + human", depthCvCarved_cpu);
+//            cv::waitKey(1);
 
 
             // fill dummy points to suppress warning message (not in the scene graph..)
@@ -462,7 +484,7 @@ void updateThread(){
                 o3d_vis::gui::Application::GetInstance().PostToMainThread(
                         vis.get(), [pointsCenter,eye, pointsO3dPtr_cpu, mat](){
                         // this is important! as visible range is determined
-                        vis->AddGeometry(cloudName,pointsO3dPtr_cpu, &mat);
+                        vis->AddGeometry(cloudName,meshPtr, &mat);
                         vis->ResetCameraToDefault();
                         vis->SetupCamera(60,pointsCenter,eye,{0.0, -1.0, 0.0});
                 });
@@ -481,7 +503,7 @@ void updateThread(){
                         // coordinates
                         vis->AddGeometry("coordinate",
                                          o3d_legacy::TriangleMesh::CreateCoordinateFrame(0.1)); // add coord at origin
-                        vis->AddGeometry(cloudName,pointsO3dPtr_cpu, &mat);
+                        vis->AddGeometry(cloudName,meshPtr, &mat);
 
                         if (isObject) {
                             // skeleton
