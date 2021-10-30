@@ -195,6 +195,9 @@ void updateThread(){
     cv::Mat imageDetectCv3ch_cpu;
     cv::Mat depthDetectCv_cpu;
     cv::Mat depthColorized_cpu;
+    cv::Range humanRowRange;
+    cv::Range humanColRange;
+
 
     // darknet objects
     cv::Size network_size = cv::Size(yoloDetectorPtr->get_net_width(),
@@ -250,6 +253,7 @@ void updateThread(){
     auto mat = o3d_vis::rendering::Material();
     mat.shader = "defaultUnlit";
 
+
     auto matLine = o3d_vis::rendering::Material();
     matLine.shader = "unlitLine";
     matLine.line_width = 3.0;
@@ -293,15 +297,19 @@ void updateThread(){
                     // gaze extraction
                     gaze = zed_utils::Gaze(humanObjects.object_list[0]);
 
-                    // pixel mask extraction (todo gpu?)
+                    // pixel mask extraction
                     auto human_bb = humanObjects.object_list[0].bounding_box_2d;
                     cv::Mat humanPixelMaskSub = zed_utils::slMat2cvMat(humanObjects.object_list[0].mask).clone();
-                    int kernelSize = 10;
-                    cv::erode(humanPixelMaskSub, humanPixelMaskSub, getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(kernelSize, kernelSize)));
-                    cv::dilate(humanPixelMaskSub, humanPixelMaskSub, getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(kernelSize, kernelSize)));
+                    int kernelSize = 20;
+//                    cv::erode(humanPixelMaskSub, humanPixelMaskSub, getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(kernelSize, kernelSize)));
+                    cv::dilate(humanPixelMaskSub, humanPixelMaskSub, getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(kernelSize,3* kernelSize)));
 
                     cv::Range rowRangeHuman(human_bb[0].y, human_bb[0].y + humanPixelMaskSub.rows );
                     cv::Range colRangeHuman(human_bb[0].x, human_bb[0].x + humanPixelMaskSub.cols);
+
+                    humanColRange = colRangeHuman;
+                    humanRowRange = rowRangeHuman;
+
                     humanPixelMask = cv::Mat::zeros(imageCv3Ch.size(),CV_8UC1);
                     cv::Mat humanPixelMaskSubPartPtr = humanPixelMask(rowRangeHuman,colRangeHuman); // shallow copy
                     humanPixelMaskSub.copyTo(humanPixelMaskSubPartPtr);
@@ -321,6 +329,7 @@ void updateThread(){
             cv::cvtColor(depthDetectCv_cpu,depthDetectCv_cpu,cv::COLOR_GRAY2BGR); // modified for visualization
 //            cv::imshow("depth",depthDetectCv_cpu);
 //            cv::waitKey(1);
+
 
             misc::Timer timerDetect;
             imageCv3Ch.download(imageCv3Ch_cpu);
@@ -393,7 +402,10 @@ void updateThread(){
                                                                  cc + colRange.start);
                                 int colorIdx = 2; // red
                                 bgr(colorIdx) = (1-alpha)*bgr(colorIdx) + alpha * 255;
+                                bgr(colorIdx-1) *= (1-alpha) ;
+                                bgr(colorIdx-2) *= (1-alpha) ;
                             }
+
 
                     // computing points of objects
                     bool isPointExistInBox = true;
@@ -438,6 +450,23 @@ void updateThread(){
 //            cv::erode(objPixelMask, objPixelMask,getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(kernelSize, kernelSize)));
             cv::dilate(objPixelMask, objPixelMask,getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(kernelSize, kernelSize)));
 
+
+            // visualizing  masked pixel
+            if (isObject) {
+                float alpha = 0.4;
+                auto maskDataPtr = (uchar *) humanPixelMask.data;
+                for (int rr = humanRowRange.start ; rr < humanRowRange.end; rr++)
+                    for (int cc = humanColRange.start ; cc < humanColRange.end; cc++)
+                        if (maskDataPtr[rr * humanPixelMask.cols + cc] == 0 ) {
+                            auto &bgr = depthDetectCv_cpu.at<cv::Vec3b>(rr,cc);
+                            int colorIdx = 0; // blue
+                            bgr(colorIdx) = (1 - alpha) * bgr(colorIdx) + alpha * 255;
+                            bgr(colorIdx+1) *= (1 - alpha)  ;
+                            bgr(colorIdx+2) *= (1 - alpha)  ;
+                        }
+            }
+
+
             // Now we gathered all mask (objects + human). Subtract them
             cv::bitwise_not(objPixelMask,objPixelMask);
             cv::Mat survivedMask;
@@ -468,6 +497,8 @@ void updateThread(){
             cv::imshow("object detection",depthDetectCv_cpu);
             cv::waitKey(1);
 
+
+
             double elapse = timerObjPointsExtraction.stop();
 
 
@@ -476,17 +507,18 @@ void updateThread(){
                 // Dummay operation to initialize cuda scope for .ToLegacy()
                 o3d_core::Tensor tensorRgbDummy(
                         (imageCv3Ch_cpu.data), {row, col, 3}, rgbType, device_gpu);
-                isInit = true;
+                isInit = meshPtr->HasTriangles();  // consider initialized only when mesh exist
 
-                auto pointsCenter = skeletonO3dPtr->GetCenter().cast<float>();
-                Eigen::Vector3f eye = pointsCenter + Eigen::Vector3f(0,0,-3);
+                auto pointsCenter = meshPtr->GetCenter();
+                Eigen::Vector3f pointsCenterEigen = pointsCenter.cast<float>();
+                Eigen::Vector3f eye = pointsCenterEigen + Eigen::Vector3f(0,0,-3);
 
                 o3d_vis::gui::Application::GetInstance().PostToMainThread(
-                        vis.get(), [pointsCenter,eye, pointsO3dPtr_cpu, mat](){
+                        vis.get(), [pointsCenterEigen, pointsCenter,eye, pointsO3dPtr_cpu, mat](){
                         // this is important! as visible range is determined
                         vis->AddGeometry(cloudName,meshPtr, &mat);
                         vis->ResetCameraToDefault();
-                        vis->SetupCamera(60,pointsCenter,eye,{0.0, -1.0, 0.0});
+                        vis->SetupCamera(60,pointsCenterEigen,eye,{0.0, -1.0, 0.0});
                 });
 
                 vis->SetLineWidth(2);
