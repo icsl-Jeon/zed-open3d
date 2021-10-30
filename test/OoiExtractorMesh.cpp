@@ -477,10 +477,6 @@ void updateThread(){
             cv::Mat depthCvCarved_cpu;
             depthCvCarved.download(depthCvCarved_cpu);
 
-            // integrate mesh
-            o3d_tensor::RGBDImage rgbdImage (imageO3d,depthCarvedO3d);
-            volumePtr->Integrate(rgbdImage.depth_,rgbdImage.color_,intrinsicO3dTensor,extrinsicO3dTensor,1);
-            *meshPtr  = volumePtr->ExtractSurfaceMesh().ToLegacy();
 
 //            cv::imshow("masked depth: objects + human", depthCvCarved_cpu);
 //            cv::waitKey(1);
@@ -498,9 +494,13 @@ void updateThread(){
             cv::waitKey(1);
 
 
-
-            double elapse = timerObjPointsExtraction.stop();
-
+            // integrate mesh
+            o3d_tensor::RGBDImage rgbdImage (imageO3d,depthCarvedO3d);
+            misc::Timer meshTimer;
+            volumePtr->Integrate(rgbdImage.depth_,rgbdImage.color_,intrinsicO3dTensor,extrinsicO3dTensor,1);
+            *meshPtr  = volumePtr->ExtractSurfaceMesh().ToLegacy();
+            double elapseMesh = meshTimer.stop();
+            printf("mesh construction in %.3f ms. \n" , elapseMesh);
 
             // initialize viewport
             if (not isInit) {
@@ -516,7 +516,8 @@ void updateThread(){
                 o3d_vis::gui::Application::GetInstance().PostToMainThread(
                         vis.get(), [pointsCenterEigen, pointsCenter,eye, pointsO3dPtr_cpu, mat](){
                         // this is important! as visible range is determined
-                        vis->AddGeometry(cloudName,meshPtr, &mat);
+                        if (meshPtr->HasTriangles())
+                            vis->AddGeometry(cloudName,meshPtr, &mat);
                         vis->ResetCameraToDefault();
                         vis->SetupCamera(60,pointsCenterEigen,eye,{0.0, -1.0, 0.0});
                 });
@@ -535,7 +536,8 @@ void updateThread(){
                         // coordinates
                         vis->AddGeometry("coordinate",
                                          o3d_legacy::TriangleMesh::CreateCoordinateFrame(0.1)); // add coord at origin
-                        vis->AddGeometry(cloudName,meshPtr, &mat);
+                        if (meshPtr->HasTriangles())
+                            vis->AddGeometry(cloudName,meshPtr, &mat);
 
                         if (isObject) {
                             // skeleton
