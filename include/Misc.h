@@ -15,12 +15,31 @@
 #include <cmath>
 #include <string>
 #include <sstream>
+#include <signal.h>
 
+#include "opencv2/cudafilters.hpp"
+#include "opencv2/cudaimgproc.hpp"
 
 using namespace std::chrono;
 using namespace std;
 
+
+
+namespace error{
+
+    struct ZedException : public std::exception
+    {
+        std::string s;
+        ZedException(std::string ss) : s(ss) {}
+        ~ZedException() throw () {} // Updated
+        const char* what() const throw() { return s.c_str(); }
+    };
+
+}
+
 namespace misc {
+
+
     class Timer {
         steady_clock::time_point t0;
         double measuredTime;
@@ -84,6 +103,9 @@ namespace misc {
         float m_epsilon;
         unsigned int n_totalCluster;
     };
+    void drawPred(string className, float conf, int left, int top, int right, int bottom, cv::Mat &frame) ;
+
+
 
 
 

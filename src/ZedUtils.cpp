@@ -50,7 +50,7 @@ bool zed_utils::parseArgs(int argc, char **argv,sl::InitParameters& param)
     return doRecord;
 }
 
-bool zed_utils::initCamera(sl::Camera &zed, sl::InitParameters initParameters) {
+bool zed_utils::initCamera(sl::Camera &zed, sl::InitParameters initParameters) { // will be deprecated
 
 
     // Parameter setting
@@ -172,13 +172,14 @@ Gaze::Gaze(const sl::ObjectData &humanObject) {
     transformation.block(0,1,3,1) = ey;
 
     // down from normal vector of eyes - nose
-    float noseDownAngle = 30 * M_PI / 180.0;
+    float noseDownAngle = 45 * M_PI / 180.0;
     Eigen::Matrix4f T = Eigen::Matrix4f::Identity();
     Eigen::Matrix2f R;
     R << cos(noseDownAngle) , sin(noseDownAngle) ,
          -sin(noseDownAngle) , cos(noseDownAngle);
     T.block(1,1,2,2) = R;
     transformation = transformation * T;
+    direction = transformation.block(0,2,3,1);
 }
 
 Eigen::Matrix4f Gaze::getTransformation() const {
@@ -199,6 +200,15 @@ float Gaze::measureAngleToPoint(const Eigen::Vector3f &point) const {
     Eigen::Vector3f viewVector = (point - root); viewVector.normalize();
     return atan2(viewVector.cross(direction).norm(), viewVector.dot(direction));
 }
+
+
+tuple<Eigen::Vector3f,Eigen::Vector3f> Gaze::getGazeLineSeg(float length)  const{
+    auto p1 = root;
+    auto p2 = p1 + direction * length;
+    return make_tuple(p1,p2);
+
+}; // p1 ~ p2
+
 
 
 

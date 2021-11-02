@@ -26,6 +26,7 @@ namespace zed_utils {
         Eigen::Matrix4f getTransformation() const;
         bool isValid() const ;
         float measureAngleToPoint(const Eigen::Vector3f & point) const;
+        tuple<Eigen::Vector3f,Eigen::Vector3f> getGazeLineSeg(float length)  const; // p1 ~ p2
 
     };
 

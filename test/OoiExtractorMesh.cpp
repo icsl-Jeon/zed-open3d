@@ -161,6 +161,10 @@ void draw_attention_box(cv::Mat mat_img,
 
 
 void updateThread(){
+    // these should not be in the same thread with open3d
+    cv::namedWindow("object detection",cv::WINDOW_KEEPRATIO);
+    cv::resizeWindow("object detection", 600,400);
+
     // ZED dynamic parameter
     sl::RuntimeParameters runParameters;
     runParameters.confidence_threshold = 50;
@@ -349,6 +353,7 @@ void updateThread(){
                     yoloDetectorPtr->detect_resized(*imageDarknet,imageCv.cols,imageCv.rows,threshold,true);
             resultBoundingBox = yoloDetectorPtr->tracking_id(resultBoundingBox);
             std::vector<AttentionStatus> attentionStatusSet;
+            printf("object detection in %.3f ms. \n" ,timerDetect.stop());
 
             // flushing previous object points
             for (auto & pcl : objPointsO3dPtr_cpu)
@@ -489,7 +494,6 @@ void updateThread(){
             }
 
             draw_attention_box(depthDetectCv_cpu,attentionStatusSet );
-            printf("object detection in %.3f ms. \n" ,timerDetect.stop());
             cv::imshow("object detection",depthDetectCv_cpu);
             cv::waitKey(1);
 
@@ -620,8 +624,6 @@ int main(int argc, char** argv) {
             return EXIT_FAILURE;
         }
     }
-    cv::namedWindow("object detection",cv::WINDOW_KEEPRATIO);
-    cv::resizeWindow("object detection", 600,400);
 
     // Initialize open3d
     meshPtr = std::make_shared<o3d_legacy::TriangleMesh>();

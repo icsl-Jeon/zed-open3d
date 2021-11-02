@@ -1,6 +1,6 @@
 CMAKE_MINIMUM_REQUIRED(VERSION 3.19)
 PROJECT(ZED_OPEN3D)
-set(CMAKE_BUILD_TYPE release)
+set(CMAKE_BUILD_TYPE debug)
 
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake/")
 message("${CMAKE_MODULE_PATH}")
@@ -78,5 +78,10 @@ target_link_libraries(TsdfIntegration PRIVATE  ${ZED_LIBS}   ${OpenCV_LIBRARIES}
 
 add_executable(OoiExtractorMesh test/OoiExtractorMesh.cpp src/ZedUtils.cpp src/Misc.cpp src/Open3dUtils.cpp )
 target_link_libraries(OoiExtractorMesh PRIVATE  ${ZED_LIBS}   ${OpenCV_LIBRARIES} Open3D::Open3D ${CUDA_LIBRARIES} ${DARKNET_LIB} )
+
+add_executable(RunScene exe/RunScene.cpp src/ZedUtils.cpp src/Misc.cpp src/Open3dUtils.cpp src/SceneInterpreter.cpp)
+target_link_libraries(RunScene PRIVATE  ${ZED_LIBS}   ${OpenCV_LIBRARIES} Open3D::Open3D ${CUDA_LIBRARIES} ${DARKNET_LIB} )
+
+
 
 
