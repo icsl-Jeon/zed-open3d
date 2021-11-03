@@ -6,11 +6,12 @@
 namespace  misc {
 
 
-    void drawPred(string className, float conf, int left, int top, int right, int bottom, cv::Mat &frame) {
+    void drawPred(string className, float conf, float x, float y, float z ,int left, int top, int right, int bottom, cv::Mat &frame) {
         cv::rectangle(frame, cv::Point(left, top), cv::Point(right, bottom), cv::Scalar(0, 255, 0),2);
 
         std::string label = cv::format("%.2f", conf);
         label = className + ": " + label;
+        std::string position = cv::format("[%.2f,%.2f,%.2f]",x,y,z);
 
         int baseLine;
         cv::Size labelSize = getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, 0.5, 1, &baseLine);
@@ -19,6 +20,8 @@ namespace  misc {
         rectangle(frame, cv::Point(left, top - labelSize.height),
                   cv::Point(left + labelSize.width, top + baseLine), cv::Scalar::all(255), cv::FILLED);
         putText(frame, label, cv::Point(left, top), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar());
+
+        putText(frame, position, cv::Point(left,bottom + labelSize.height), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0,0,255));
     }
 
     int DBSCAN::run() {

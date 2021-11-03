@@ -103,7 +103,8 @@ namespace misc {
         float m_epsilon;
         unsigned int n_totalCluster;
     };
-    void drawPred(string className, float conf, int left, int top, int right, int bottom, cv::Mat &frame) ;
+    void drawPred(string className, float conf,  float x, float y, float z,
+                  int left, int top, int right, int bottom, cv::Mat &frame) ;
 
 
 

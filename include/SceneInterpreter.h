@@ -11,6 +11,8 @@
 #include <ZedUtils.h>
 #include <Misc.h>
 #include <mutex>
+#include "opencv2/cudaarithm.hpp"
+
 
 
 using namespace std;
@@ -45,7 +47,9 @@ namespace iswy { // i see with you
     // visualization with open3d and opencv ...
     struct VisParam{
         string nameImageWindow = "image perception";
+        float objectPixelAlpha = 0.5;
 
+        int const attentionColors[4][3] = {{51,51,255}, {0,128,255}, {0,255,255},{51,255,51}}; // BGR
 
     };
 
@@ -89,16 +93,21 @@ namespace iswy { // i see with you
         sl::RuntimeParameters getRtParam() const {return runtimeParameters;};
         sl::ObjectDetectionRuntimeParameters getObjRtParam() const {return objectDetectionRuntimeParameters;}
         cv::Size getCvSize() const {return cv::Size(width,height);};
-        cv::Point2f project(const Eigen::Vector3f& pnt) const {return {fx*pnt.x()/pnt.z() + cx, fx*pnt.y()/pnt.z() + cy};};
+        cv::Point2f project(const Eigen::Vector3f& pnt) const{
+            return {fx*pnt.x()/pnt.z() + cx, fx*pnt.y()/pnt.z() + cy};};
+        inline void unProject (cv::Point uv, float depth, float& xOut, float& yOut, float & zOut) const{
+            zOut = depth;
+            xOut = (uv.x - cx) * depth / fx;
+            yOut = (uv.y - cy) * depth / fy;
+        };
+
     };
-
-
 
 
     struct AttentionParam{
         int ooi = 39; // bottle
         float gazeFov = M_PI /3.0 *2.0; // cone (height/rad) = tan(gazeFov/2)
-
+        float gazeImportance = 0.4;
     };
 
 
@@ -112,6 +121,8 @@ namespace iswy { // i see with you
         float nmsThreshold = 0.2;
         float objectDepthMin = 0.01;
         float objectDepthMax = 5.0;
+        float objectDimensionAlongOptical = 1.0;
+
 
     };
 
@@ -121,13 +132,17 @@ namespace iswy { // i see with you
 
     struct DetectedObject{
         cv::Rect boundingBox;
-        cv::cuda::GpuMat mask; // 255 masking
+//        cv::cuda::GpuMat mask; // 255 masking in the bounding box
+        cv::Mat mask_cpu; // 255 masking in the bounding box
         int classLabel;
         string className;
         float confidence ;
         Eigen::Vector3f centerPoint;
 
-        void drawMe (cv::Mat& image, int ooi) const;
+        void drawMe (cv::Mat& image,float alpha ,int ooi) const;
+        void findMe (const cv::cuda::GpuMat& depth,
+                     ObjectDetectParam param, CameraParam camParam );
+
         float attentionCost = INFINITY;
         void updateAttentionCost (float cost) {attentionCost = cost; }
 
@@ -137,7 +152,7 @@ namespace iswy { // i see with you
         zed_utils::Gaze gaze;
         Eigen::Vector3f leftHand; // left hand location
         Eigen::Vector3f rightHand; // right hand location
-        float evalAttentionCost(DetectedObject& object, bool updateObject = true);
+        float evalAttentionCost(DetectedObject& object, AttentionParam param, bool updateObject = true);
         bool isValid() {return (not isnan(leftHand.norm()) and (not isnan(leftHand.norm())) and gaze.isValid()); }
         void drawMe (cv::Mat& image, CameraParam camParam); // todo extrinsic
     };
@@ -163,7 +178,6 @@ namespace iswy { // i see with you
         cv::cuda::GpuMat depthCv;
         cv::cuda::GpuMat fgMask; // {human, objects} = 255
         cv::cuda::GpuMat bgDepthCv; // depth - {human, objects}
-
     };
 
 
@@ -188,6 +202,7 @@ namespace iswy { // i see with you
         // attention
         AttentionParam paramAttention;
         AttentionEvaluator attention;
+        void drawAttentionScores(cv::Mat& image, const vector<DetectedObject>& objs) const;
 
         // variables in device
         DeviceData deviceData;

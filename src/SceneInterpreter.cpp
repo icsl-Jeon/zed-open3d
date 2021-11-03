@@ -214,17 +214,26 @@ namespace iswy{
                                    zedState.actor.keypoint[rightHandIdx].y,
                                    zedState.actor.keypoint[rightHandIdx].z};
 
-
-
-
             // yolo obj detectors
             detect();
 
-
+            // evalute attention for each object
+            for (auto& obj: detectedObjects)
+                if (obj.classLabel == paramAttention.ooi)
+                attention.evalAttentionCost(obj,paramAttention);
 
         }
         printf("terminating camera thread. \n");
+    }
 
+    float AttentionEvaluator::evalAttentionCost(DetectedObject &object, AttentionParam param, bool updateObject) {
+        float angleFromGaze = gaze.measureAngleToPoint(object.centerPoint);
+        float distToLeftHand = (leftHand - object.centerPoint.cast<float>()).norm();
+        float distToRightHand = (rightHand - object.centerPoint.cast<float>()).norm();
+        float cost = param.gazeImportance* angleFromGaze + (distToRightHand + distToLeftHand);
+        if(updateObject)
+            object.updateAttentionCost(cost);
+        return  cost;
     }
 
     void SceneInterpreter::detect() {
@@ -362,29 +371,92 @@ namespace iswy{
             confidences = nmsConfidences;
         }
 
+
         // collect result
+        cv::Mat depthRaw; deviceData.depthCv.download(depthRaw);
         for (size_t idx = 0; idx < boxes.size(); ++idx){
             DetectedObject obj;
-            obj.boundingBox = boxes[idx];
+            obj.boundingBox = boxes[idx] & cv::Rect(0,0,zedParam.getCvSize().width,zedParam.getCvSize().height);
             obj.classLabel = classIds[idx];
             obj.confidence = confidences[idx];
             obj.className =paramDetect.classNames[classIds[idx] ];
 
             // calculating mask
-            cv::cuda::GpuMatND histogram;
-
-
-
+            obj.findMe(deviceData.depthCv,paramDetect,zedParam);
 
             detectedObjects.emplace_back(obj);
-
         }
     }
 
-    void DetectedObject::drawMe(cv::Mat& image, int ooi = -1) const{
+    void DetectedObject::findMe(const cv::cuda::GpuMat &depth,
+                                ObjectDetectParam param, CameraParam camParam) {
+        // find the pixels of this object
+        cv::Mat depthBB; depth(boundingBox).download(depthBB);
+
+        cv::MatND histogram;
+        float channel_range[2] = { param.objectDepthMin , param.objectDepthMax };
+        const float* channel_ranges[1] = { channel_range };
+        int histSize[1] = { 50 };
+        int channel[1] = { 0 };
+        cv::calcHist(&depthBB,1,channel,cv::Mat(),histogram,1,histSize,channel_ranges);
+        histogram.at<float>(0) = 0 ; // garbage values suppressed
+        auto histDataPtr = (float *) histogram.data;
+        vector<float> histData(histDataPtr, histDataPtr + histSize[0]);
+
+        int peakIdx = max_element(histData.begin(),histData.end()) - histData.begin();
+        float peakDepth = channel_range[0] +  (channel_range[1]- channel_range[0]) / float(histSize[0]) * peakIdx;
+
+        float depthWindowMin = peakDepth - param.objectDimensionAlongOptical/2.0;
+        float depthWindowMax = peakDepth + param.objectDimensionAlongOptical/2.0;
+        cv::inRange( depthBB,
+                    cv::Scalar (depthWindowMin),cv::Scalar (depthWindowMax),
+                    mask_cpu);
+//        mask.upload(mask_cpu);
+
+        // update 3D position by averaging the masked region (todo kernel)
+        float xCur,yCur,zCur;
+        float xCenter,yCenter,zCenter;
+        int cnt = 0;
+        int R = mask_cpu.size().height, C = mask_cpu.size().width;
+        for (int r= 0 ; r < R ; r++)
+            for (int c= 0 ; c < C ; c++)
+                if (mask_cpu.at<uchar>(r,c)) {
+                    // global image pixel
+                    int u = c + boundingBox.x;
+                    int v = r + boundingBox.y;
+                    float depthVal = depthBB.at<float>(r,c);
+                    camParam.unProject(cv::Point(u,v),depthVal,xCur,yCur,zCur);
+                    xCenter+=xCur;
+                    yCenter+=yCur;
+                    zCenter+=zCur;
+                    cnt ++;
+                }
+        xCenter/= cnt; yCenter/=cnt; zCenter/=cnt;
+        centerPoint = Eigen::Vector3f(xCenter,yCenter,zCenter);
+    }
+
+    void DetectedObject::drawMe(cv::Mat& image, float alpha = 0.5 ,int ooi = -1) const{
+        // image is assumed 3h
+
+        // box
         auto& box = boundingBox;
-        misc::drawPred(className,confidence, box.x, box.y,
+        misc::drawPred(className,confidence,
+                       centerPoint.x(),centerPoint.y(),centerPoint.z(),
+                       box.x, box.y,
                        box.x + box.width, box.y + box.height, image);
+
+        // coloring my pixel
+        auto ptr = image(box); int R = mask_cpu.size().height, C = mask_cpu.size().width;
+        for (int r= 0 ; r < R ; r++)
+            for (int c= 0 ; c < C ; c++){
+                if (mask_cpu.at<uchar>(r,c)){
+                    auto& bgr = ptr.at<cv::Vec3b>(r,c);
+                    bgr(2) = (1-alpha)*bgr(2) + alpha * 255;
+                    bgr(1) *= (1-alpha) ;
+                    bgr(1) *= (1-alpha) ;
+                }
+            }
+
     }
 
     void AttentionEvaluator::drawMe(cv::Mat &image, CameraParam camParam) {
@@ -411,13 +483,52 @@ namespace iswy{
         cv::circle(image,p4,rad4/2,cv::Scalar(b,g,r),circleWidth);
     }
 
-    void SceneInterpreter::forwardToVisThread(){
-            deviceData.imageCv3ch.download(visOpenCv.image);
-            if (not detectedObjects.empty())
-                visOpenCv.curObjVis = detectedObjects;
+    void SceneInterpreter::forwardToVisThread() {
 
+        deviceData.imageCv3ch.download(visOpenCv.image);
+        if (not detectedObjects.empty())
+            visOpenCv.curObjVis = detectedObjects;
 
     }
+
+    void SceneInterpreter::drawAttentionScores(cv::Mat& image, const vector<DetectedObject>& objs) const{
+        // assuming the objs are sorted
+        int nObject = objs.size();
+
+        for (int nn = 0 ; nn < nObject; nn++) {
+            // determine color: INF = black. the others = red, orange, yellow, green
+            cv::Rect box = objs[nn].boundingBox;
+            cv::Scalar color;
+            float cost = objs[nn].attentionCost;
+            bool isAttentionCalculated =  cost != INFINITY;
+            if (not isAttentionCalculated) {
+                color = cv::Scalar(10, 10, 10);
+            } else {
+                int colorIdx = min(nn, 3);
+                color = cv::Scalar(paramVis.attentionColors[colorIdx][0],
+                                   paramVis.attentionColors[colorIdx][1],
+                                   paramVis.attentionColors[colorIdx][2]);
+            }
+
+            if (isAttentionCalculated) {
+                cv::rectangle(image, box, color, 2); // rectangle frame
+                std::stringstream ss;
+                ss << std::fixed << std::setprecision(1) << "cost: " << cost;
+                string scoreString = ss.str();
+
+                cv::Size const text_size = getTextSize(scoreString, cv::FONT_HERSHEY_COMPLEX_SMALL, 1.2, 2, 0);
+                int max_width = (text_size.width > box.width + 2) ? text_size.width : (box.width + 2);
+                max_width = std::max(max_width, (int) box.width + 2);
+                cv::rectangle(image, cv::Point2f(std::max((int) box.x - 1, 0), std::max((int) box.y - 35, 0)),
+                              cv::Point2f(std::min((int) box.x + max_width,image.cols - 1),
+                                          std::min((int) box.y,image.rows - 1)),
+                              color, cv::FILLED, 8, 0);
+                putText(image,scoreString, cv::Point2f(box.x, box.y - 16), cv::FONT_HERSHEY_COMPLEX_SMALL, 1.2,
+                        cv::Scalar(0, 0, 0), 2);
+            }
+        } // iter: detection box
+    }
+
 
     void SceneInterpreter::visThread() {
 
@@ -426,16 +537,31 @@ namespace iswy{
         cv::resizeWindow(paramVis.nameImageWindow, 600, 400);
 
         while(activeWhile){
-
             forwardToVisThread();
 
             if (not visOpenCv.image.empty()) {
-                // object
-                for (const auto& obj: visOpenCv.curObjVis )
-                    if (obj.classLabel == paramAttention.ooi)
-                        obj.drawMe(visOpenCv.image);
+                // object: this is used when confidence monitoring is requried
+//                for (const auto& obj: visOpenCv.curObjVis )
+//                    if (obj.classLabel == paramAttention.ooi)
+//                        obj.drawMe(visOpenCv.image);
+
                 // human
                 attention.drawMe(visOpenCv.image,zedParam);
+
+                //  object cost w.r.t human attention
+                std::sort(visOpenCv.curObjVis.begin(),
+                          visOpenCv.curObjVis.end(),
+                          [](DetectedObject& attentionLhs,DetectedObject& attentionRhs){
+                              return attentionLhs.attentionCost < attentionRhs.attentionCost;}
+                );
+
+                drawAttentionScores(visOpenCv.image,visOpenCv.curObjVis);
+
+
+
+
+
+
 
                 cv::imshow(paramVis.nameImageWindow, visOpenCv.image);
                 cv::waitKey(1);
