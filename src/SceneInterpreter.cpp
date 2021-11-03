@@ -370,6 +370,12 @@ namespace iswy{
             obj.confidence = confidences[idx];
             obj.className =paramDetect.classNames[classIds[idx] ];
 
+            // calculating mask
+            cv::cuda::GpuMatND histogram;
+
+
+
+
             detectedObjects.emplace_back(obj);
 
         }
@@ -389,7 +395,7 @@ namespace iswy{
         uchar r = 77.0 ;
         uchar g = 143.0 ;
         uchar b = 247.0 ;
-        cv::arrowedLine(image,p1,p2,{b,g,r},2);
+        cv::arrowedLine(image,p1,p2,cv::Scalar(b,g,r),2);
 
         // hands
         float handRad = 0.08; float circleWidth = 3;
@@ -403,7 +409,6 @@ namespace iswy{
         cv::Point2f p42 = camParam.project(rightHand +  Eigen::Vector3f(handRad,0,0));
         cv::Point2f p4 = (p41 + p42)/2.0; float rad4 = abs(norm((p41 - p42)));
         cv::circle(image,p4,rad4/2,cv::Scalar(b,g,r),circleWidth);
-
     }
 
     void SceneInterpreter::forwardToVisThread(){

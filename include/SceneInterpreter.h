@@ -110,6 +110,9 @@ namespace iswy { // i see with you
         vector<string> classNames;
         float confidence = 0.2;
         float nmsThreshold = 0.2;
+        float objectDepthMin = 0.01;
+        float objectDepthMax = 5.0;
+
     };
 
     struct humanDetectParam{
@@ -118,6 +121,7 @@ namespace iswy { // i see with you
 
     struct DetectedObject{
         cv::Rect boundingBox;
+        cv::cuda::GpuMat mask; // 255 masking
         int classLabel;
         string className;
         float confidence ;
